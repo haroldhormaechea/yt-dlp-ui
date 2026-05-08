@@ -107,10 +107,21 @@ fn seeded_row_survives_smoke_run() {
     cmd.env("YT_DLP_UI_SMOKE", "1")
         .env("PATH", &path_var)
         .env("RUST_LOG", "info");
+    // Smoke spawns the app binary which calls `paths::default_download_dir()`
+    // at startup. UserDirs on Linux returns None when XDG_DOWNLOAD_DIR is
+    // unset AND ~/Downloads doesn't exist (the GHA Ubuntu runner shape).
+    // Stage a Downloads subdir under tmp and point both HOME and
+    // XDG_DOWNLOAD_DIR at it. macOS keeps the existing HOME=data_dir
+    // (UserDirs there returns ~/Downloads regardless of existence).
     if cfg!(target_os = "macos") {
         cmd.env("HOME", &data_dir);
     } else {
+        let downloads = tmp.path().join("Downloads");
+        fs::create_dir_all(&downloads).expect("mkdir Downloads");
         cmd.env("XDG_DATA_HOME", &data_dir);
+        cmd.env("HOME", tmp.path());
+        cmd.env("USERPROFILE", tmp.path());
+        cmd.env("XDG_DOWNLOAD_DIR", &downloads);
     }
 
     let output = cmd.output().expect("run app");
@@ -227,10 +238,21 @@ fn dest_dir_setting_persists_across_smoke_run() {
     cmd.env("YT_DLP_UI_SMOKE", "1")
         .env("PATH", &path_var)
         .env("RUST_LOG", "info");
+    // Smoke spawns the app binary which calls `paths::default_download_dir()`
+    // at startup. UserDirs on Linux returns None when XDG_DOWNLOAD_DIR is
+    // unset AND ~/Downloads doesn't exist (the GHA Ubuntu runner shape).
+    // Stage a Downloads subdir under tmp and point both HOME and
+    // XDG_DOWNLOAD_DIR at it. macOS keeps the existing HOME=data_dir
+    // (UserDirs there returns ~/Downloads regardless of existence).
     if cfg!(target_os = "macos") {
         cmd.env("HOME", &data_dir);
     } else {
+        let downloads = tmp.path().join("Downloads");
+        fs::create_dir_all(&downloads).expect("mkdir Downloads");
         cmd.env("XDG_DATA_HOME", &data_dir);
+        cmd.env("HOME", tmp.path());
+        cmd.env("USERPROFILE", tmp.path());
+        cmd.env("XDG_DOWNLOAD_DIR", &downloads);
     }
 
     let output = cmd.output().expect("run app");

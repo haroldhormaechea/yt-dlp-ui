@@ -53,18 +53,27 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
-      - name: Install Linux native deps for wry
+      - name: Install Linux native deps for wry + xvfb
         if: runner.os == 'Linux'
+        # xvfb provides a headless X server so the persistence smoke tests
+        # (which spawn the `app` binary in YT_DLP_UI_SMOKE=1 mode) can
+        # initialize Slint's winit backend on a headless GHA runner.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config \
-            libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev \
+            xvfb
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1 (stable)
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@23869a5bd66c73db3c0ac40331f3206eb23791dc  # v2.9.1
-      - run: cargo test --workspace
+      - name: cargo test --workspace (Linux, under xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test --workspace
+      - name: cargo test --workspace (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: cargo test --workspace
 
   scripts-bats:
     name: bats (scripts)

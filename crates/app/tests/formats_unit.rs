@@ -51,7 +51,12 @@ fn format_size_handles_extreme_values_without_panic() {
 
 // -- format_dest_dir -------------------------------------------------------
 
+// Unix-only: Windows uses %USERPROFILE% rather than $HOME, and the
+// production code's tilde-substitution logic targets the Unix HOME shape.
+// On Windows runners HOME is unset, so the test would compose `/tmp/...`
+// and the assertion would fail spuriously.
 #[test]
+#[cfg(unix)]
 fn format_dest_dir_substitutes_home_with_tilde() {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let dir = PathBuf::from(format!("{home}/Downloads/yt-dlp-ui"));

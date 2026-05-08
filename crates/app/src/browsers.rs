@@ -258,7 +258,8 @@ fn linux_flatpak_id(browser: Browser) -> Option<&'static str> {
         Browser::Firefox => Some("org.mozilla.firefox"),
         Browser::Opera => Some("com.opera.Opera"),
         Browser::Vivaldi => Some("com.vivaldi.Vivaldi"),
-        _ => None,
+        // Safari ships only on macOS; no Linux flatpak.
+        Browser::Safari => None,
     }
 }
 

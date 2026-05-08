@@ -38,10 +38,11 @@ pub enum PathError {
 
 /// Returns the per-OS app-data directory for `yt-dlp-ui`.
 ///
-/// Concretely:
+/// Concretely (per the `directories` crate's per-OS conventions):
 /// - **Linux:** `~/.local/share/yt-dlp-ui/`
 /// - **macOS:** `~/Library/Application Support/yt-dlp-ui/`
-/// - **Windows:** `%LOCALAPPDATA%\yt-dlp-ui\`
+/// - **Windows:** `%LOCALAPPDATA%\yt-dlp-ui\data\` (the trailing `\data` is
+///   the Windows convention enforced by `ProjectDirs::data_local_dir`).
 ///
 /// # Errors
 ///

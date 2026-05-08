@@ -27,7 +27,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if (-not $env:DENO_VERSION) {
-    Write-Error 'DENO_VERSION env var is required'
+    [Console]::Error.WriteLine('DENO_VERSION env var is required')
     exit 65
 }
 
@@ -52,12 +52,12 @@ try {
     # The .sha256sum file has format: "<hash>  <asset>"
     $expectedSha = (Get-Content -LiteralPath (Join-Path $workDir $shaAsset) | Select-Object -First 1) -split '\s+' | Select-Object -First 1
     if (-not $expectedSha) {
-        Write-Error "could not parse $shaAsset"
+        [Console]::Error.WriteLine("could not parse $shaAsset")
         exit 72
     }
     $actualSha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workDir $asset)).Hash.ToLower()
     if ($expectedSha.ToLower() -ne $actualSha) {
-        Write-Error "sha256 mismatch for ${asset}: expected $expectedSha, got $actualSha"
+        [Console]::Error.WriteLine("sha256 mismatch for ${asset}: expected $expectedSha, got $actualSha")
         exit 73
     }
 
@@ -70,7 +70,7 @@ try {
     $srcBin = if ($TargetTriple -like '*windows*') { 'deno.exe' } else { 'deno' }
     $srcPath = Join-Path $extractDir $srcBin
     if (-not (Test-Path -LiteralPath $srcPath -PathType Leaf)) {
-        Write-Error "extracted archive missing $srcBin"
+        [Console]::Error.WriteLine("extracted archive missing $srcBin")
         exit 71
     }
 

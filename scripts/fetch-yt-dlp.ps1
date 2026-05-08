@@ -29,7 +29,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if (-not $env:YT_DLP_VERSION) {
-    Write-Error 'YT_DLP_VERSION env var is required'
+    [Console]::Error.WriteLine('YT_DLP_VERSION env var is required')
     exit 65
 }
 
@@ -39,7 +39,7 @@ if (-not $env:REPO_ROOT) {
 
 $keyPath = Join-Path $env:REPO_ROOT 'scripts/keys/yt-dlp.asc'
 if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) {
-    Write-Error "yt-dlp.asc not found at $keyPath"
+    [Console]::Error.WriteLine("yt-dlp.asc not found at $keyPath")
     exit 75
 }
 
@@ -51,7 +51,7 @@ $asset = switch ($TargetTriple) {
     'x86_64-apple-darwin'       { 'yt-dlp_macos' }
     'aarch64-apple-darwin'      { 'yt-dlp_macos' }
     default {
-        Write-Error "unknown target triple: $TargetTriple"
+        [Console]::Error.WriteLine("unknown target triple: $TargetTriple")
         exit 64
     }
 }
@@ -80,12 +80,12 @@ try {
     $env:GNUPGHOME = $gnupgDir.FullName
     & gpg --batch --quiet --import $keyPath 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Error 'gpg --import failed'
+        [Console]::Error.WriteLine('gpg --import failed')
         exit 74
     }
     & gpg --batch --quiet --verify (Join-Path $workDir 'SHA2-256SUMS.sig') (Join-Path $workDir 'SHA2-256SUMS') 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Write-Error 'GPG verification failed for SHA2-256SUMS'
+        [Console]::Error.WriteLine('GPG verification failed for SHA2-256SUMS')
         exit 74
     }
 
@@ -96,12 +96,12 @@ try {
         Select-Object -First 1) -split '\s+' |
         Select-Object -First 1
     if (-not $expectedSha) {
-        Write-Error "$asset not listed in SHA2-256SUMS"
+        [Console]::Error.WriteLine("$asset not listed in SHA2-256SUMS")
         exit 72
     }
     $actualSha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workDir $asset)).Hash.ToLower()
     if ($expectedSha.ToLower() -ne $actualSha) {
-        Write-Error "sha256 mismatch for ${asset}: expected $expectedSha, got $actualSha"
+        [Console]::Error.WriteLine("sha256 mismatch for ${asset}: expected $expectedSha, got $actualSha")
         exit 73
     }
 

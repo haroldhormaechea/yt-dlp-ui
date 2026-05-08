@@ -28,7 +28,7 @@ $ErrorActionPreference = 'Stop'
 
 $pinsFile = Join-Path $PSScriptRoot 'runtime-deps-pins.env'
 if (-not (Test-Path -LiteralPath $pinsFile -PathType Leaf)) {
-    Write-Error "pins file not found at $pinsFile"
+    [Console]::Error.WriteLine("pins file not found at $pinsFile")
     exit 75
 }
 
@@ -43,13 +43,13 @@ foreach ($line in Get-Content -LiteralPath $pinsFile) {
 
 foreach ($k in @('FFMPEG_VERSION', 'FFMPEG_RELEASE_TAG', 'FFMPEG_SHA256_WIN64')) {
     if (-not $pins.ContainsKey($k) -or -not $pins[$k]) {
-        Write-Error "$k missing from pins file"
+        [Console]::Error.WriteLine("$k missing from pins file")
         exit 65
     }
 }
 
 if ($TargetTriple -like '*apple-darwin') {
-    Write-Error 'macOS uses build-ffmpeg-macos.sh, not fetch-ffmpeg.ps1'
+    [Console]::Error.WriteLine('macOS uses build-ffmpeg-macos.sh, not fetch-ffmpeg.ps1')
     exit 64
 }
 
@@ -58,7 +58,7 @@ $asset = switch ($TargetTriple) {
     'x86_64-unknown-linux-gnu'  { "ffmpeg-$($pins.FFMPEG_RELEASE_TAG)-linux64-lgpl-7.1.tar.xz" }
     'aarch64-unknown-linux-gnu' { "ffmpeg-$($pins.FFMPEG_RELEASE_TAG)-linuxarm64-lgpl-7.1.tar.xz" }
     default {
-        Write-Error "unknown target triple: $TargetTriple"
+        [Console]::Error.WriteLine("unknown target triple: $TargetTriple")
         exit 64
     }
 }
@@ -70,7 +70,7 @@ $expectedSha = switch ($TargetTriple) {
 }
 
 if ($asset -notlike '*-lgpl-*') {
-    Write-Error "refusing to fetch non-LGPL asset: $asset"
+    [Console]::Error.WriteLine("refusing to fetch non-LGPL asset: $asset")
     exit 64
 }
 
@@ -100,12 +100,12 @@ try {
     $actualSha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workDir $asset)).Hash.ToLower()
 
     if ($expectedSha.ToLower() -ne $actualSha) {
-        Write-Error "in-tree SHA256 pin mismatch for ${asset}: expected $expectedSha, got $actualSha"
+        [Console]::Error.WriteLine("in-tree SHA256 pin mismatch for ${asset}: expected $expectedSha, got $actualSha")
         exit 73
     }
 
     if ($remoteSha -and ($remoteSha.ToLower() -ne $actualSha)) {
-        Write-Error "remote checksums.sha256 mismatch for ${asset}: remote $remoteSha, actual $actualSha"
+        [Console]::Error.WriteLine("remote checksums.sha256 mismatch for ${asset}: remote $remoteSha, actual $actualSha")
         exit 73
     }
 
@@ -122,14 +122,14 @@ try {
         # tar -xJf for tar.xz; PS 7 ships tar.exe on Windows.
         & tar -xJf (Join-Path $workDir $asset) -C $extractedRoot
         if ($LASTEXITCODE -ne 0) {
-            Write-Error "tar extraction failed with $LASTEXITCODE"
+            [Console]::Error.WriteLine("tar extraction failed with $LASTEXITCODE")
             exit 72
         }
     }
 
     $topDir = Get-ChildItem -LiteralPath $extractedRoot -Directory | Select-Object -First 1
     if (-not $topDir) {
-        Write-Error 'unexpected archive layout: no top-level directory'
+        [Console]::Error.WriteLine('unexpected archive layout: no top-level directory')
         exit 72
     }
 
@@ -141,7 +141,7 @@ try {
     )
     $ffmpegBin = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
     if (-not $ffmpegBin) {
-        Write-Error 'ffmpeg binary not found inside extracted archive'
+        [Console]::Error.WriteLine('ffmpeg binary not found inside extracted archive')
         exit 72
     }
 

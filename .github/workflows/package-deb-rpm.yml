@@ -41,7 +41,7 @@ jobs:
       # package job runs on a fresh runner with a fresh checkout (the
       # `runtime-deps/` from build-local-artifacts does NOT survive).
       YT_DLP_VERSION: "2026.03.17"
-      DENO_VERSION: "1.47.2"
+      DENO_VERSION: "2.7.14"
 
     permissions:
       contents: read

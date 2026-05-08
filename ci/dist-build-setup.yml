@@ -15,7 +15,7 @@
   shell: bash
   env:
     YT_DLP_VERSION: "2026.03.17"
-    DENO_VERSION: "1.47.2"
+    DENO_VERSION: "2.7.14"
   run: |
     mkdir -p runtime-deps
     bash scripts/fetch-yt-dlp.sh "${{ matrix.targets[0] }}" runtime-deps/
@@ -50,7 +50,7 @@
   shell: pwsh
   env:
     YT_DLP_VERSION: "2026.03.17"
-    DENO_VERSION: "1.47.2"
+    DENO_VERSION: "2.7.14"
   run: |
     New-Item -ItemType Directory -Force -Path runtime-deps | Out-Null
     pwsh scripts/fetch-yt-dlp.ps1 -TargetTriple "${{ matrix.targets[0] }}" -OutputDir runtime-deps/

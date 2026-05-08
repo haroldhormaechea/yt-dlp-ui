@@ -27,7 +27,7 @@ jobs:
       WEBVIEW2_BOOTSTRAPPER_URL: "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
       WEBVIEW2_BOOTSTRAPPER_SHA256: "5cb35e73342e3bdfea0293d1598a8e10d32d5fce78e55acb5ead00ab918e63fb"
       YT_DLP_VERSION: "2026.03.17"
-      DENO_VERSION: "1.47.2"
+      DENO_VERSION: "2.7.14"
 
     permissions:
       contents: read

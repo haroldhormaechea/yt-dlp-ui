@@ -1,0 +1,26 @@
+// Helper component — picks the right source-icon glyph from a hostname-derived
+// kind string. Keeps callers from having to chain `if source == "..."`.
+// Lives in its own file (separate from icons.slint) so the design-system
+// `Icon` primitive can be inherited without creating an import cycle:
+// design/components.slint imports Icons from icons.slint for the rendered
+// _ComponentSmoke, so icons.slint must not depend on design/components.slint.
+
+import { Icon } from "design/components.slint";
+import { Icons } from "icons.slint";
+
+export component SourceIcon inherits Icon {
+    in property <string> source-kind;
+
+    size: "sm";
+    tint: white;
+    opacity: 0.85;
+    source: root.icon-for-source();
+
+    function icon-for-source() -> image {
+        if (root.source-kind == "youtube")    { return Icons.youtube; }
+        if (root.source-kind == "vimeo")      { return Icons.vimeo; }
+        if (root.source-kind == "soundcloud") { return Icons.soundcloud; }
+        if (root.source-kind == "bandcamp")   { return Icons.bandcamp; }
+        return Icons.globe;
+    }
+}

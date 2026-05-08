@@ -1,0 +1,68 @@
+# nfpm config for yt-dlp-ui Linux packaging (.deb + .rpm).
+#
+# Variables resolved at packaging time by nfpm from the environment:
+#   ${VERSION}        — semver string (workflow extracts from ${{ github.ref_name }} minus 'v')
+#   ${ARCH}           — amd64 | arm64 (per matrix split in package-deb-rpm.yml)
+#   ${TARGET_TRIPLE}  — Rust target triple (x86_64-unknown-linux-gnu | aarch64-unknown-linux-gnu)
+#
+# FHS placement: /opt/yt-dlp-ui/ for the bundled app (third-party self-contained
+# software per Debian Policy § 3.1.4); /usr/bin/yt-dlp-ui is a thin shell
+# launcher that execs the real binary. Resolution via
+# `crates/app/src/paths.rs::expected_bundled_path_from()` works because
+# `current_exe()` returns the real binary path post-exec, not the wrapper.
+#
+# Per-distro `depends` overrides exist because Debian-family and Fedora-family
+# split webkit2gtk-4.1 / libsoup-3 into differently-named packages. Verified
+# at implementation time:
+#   - Debian/Ubuntu (apt-cache search): libwebkit2gtk-4.1-0, libsoup-3.0-0
+#   - Fedora/openSUSE (dnf info / zypper search): webkit2gtk4.1, libsoup3
+name: yt-dlp-ui
+version: ${VERSION}
+arch: ${ARCH}
+maintainer: "Harold Hormaechea <hhormaechea@iriusrisk.com>"
+description: "Desktop UI wrapping yt-dlp for non-technical users."
+license: "PolyForm-Noncommercial-1.0.0"
+homepage: "https://github.com/HaroldHormaechea/yt-dlp-ui"
+
+contents:
+  - src: target/${TARGET_TRIPLE}/release/app
+    dst: /opt/yt-dlp-ui/yt-dlp-ui
+    file_info:
+      mode: 0755
+  - src: target/${TARGET_TRIPLE}/release/ad-window
+    dst: /opt/yt-dlp-ui/ad-window
+    file_info:
+      mode: 0755
+  - src: runtime-deps/yt-dlp
+    dst: /opt/yt-dlp-ui/yt-dlp
+    file_info:
+      mode: 0755
+  - src: runtime-deps/deno
+    dst: /opt/yt-dlp-ui/deno
+    file_info:
+      mode: 0755
+  - src: runtime-deps/ffmpeg
+    dst: /opt/yt-dlp-ui/ffmpeg
+    file_info:
+      mode: 0755
+  - src: runtime-deps/ffmpeg-LICENSE.txt
+    dst: /usr/share/doc/yt-dlp-ui/ffmpeg-LICENSE.txt
+  - src: installer/launcher.sh
+    dst: /usr/bin/yt-dlp-ui
+    file_info:
+      mode: 0755
+  - src: LICENSE
+    dst: /usr/share/doc/yt-dlp-ui/LICENSE
+  - src: installer/yt-dlp-LICENSE.txt
+    dst: /usr/share/doc/yt-dlp-ui/yt-dlp-LICENSE.txt
+
+deb:
+  depends:
+    - libwebkit2gtk-4.1-0
+    - libsoup-3.0-0
+
+overrides:
+  rpm:
+    depends:
+      - webkit2gtk4.1
+      - libsoup3

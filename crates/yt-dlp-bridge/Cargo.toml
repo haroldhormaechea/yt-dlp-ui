@@ -1,0 +1,41 @@
+[package]
+name = "yt-dlp-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "yt-dlp-ui bridge crate — typed wrapper around the bundled yt-dlp binary. UI-free, async-runtime-minimal, unit-testable in isolation."
+
+[lints]
+workspace = true
+
+[lib]
+name = "yt_dlp_bridge"
+path = "src/lib.rs"
+
+[dependencies]
+# Deliberately scoped: NOT `tokio = "full"`. This crate stays UI-free and
+# keeps its async-runtime surface small so it can be reused by tooling that
+# isn't a desktop app (e.g., a future CLI smoke test, the dev-team QA agent's
+# parser fuzzer).
+tokio = { workspace = true, features = ["process", "io-util", "sync", "rt", "macros", "time"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+# UC 02: Unix-only signal kit for the two-stage SIGTERM → grace → SIGKILL
+# cancel body. Single-feature scope (`signal`) keeps the dependency surface
+# small. Windows builds fall back to `child.start_kill()` (immediate
+# `TerminateProcess`) and never link `nix`.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", default-features = false, features = ["signal"] }
+
+[dev-dependencies]
+proptest = "1.5"
+pretty_assertions = "1.4"
+insta = "1.40"
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

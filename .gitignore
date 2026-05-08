@@ -1,0 +1,38 @@
+# yt-dlp-ui — Rust workspace.
+
+# Cargo build output for the workspace.
+/target/
+
+# llvm-cov / grcov instrumentation files.
+*.profraw
+
+# Local-only Cargo overrides (tokens, registry config, etc.). Do NOT commit.
+.cargo/config.toml.local
+
+# Slint live-preview cache (if `slint-viewer` is used during dev).
+.slint-cache/
+
+# Release-time fetched binaries (yt-dlp, deno, ffmpeg) staged for cargo-dist's
+# `include` mechanism. Never committed; populated on each runner by
+# scripts/fetch-{yt-dlp,deno,ffmpeg}.{sh,ps1} and scripts/build-ffmpeg-macos.sh.
+runtime-deps/
+
+# OS / editor noise.
+.DS_Store
+.idea/
+.vscode/
+*.iml
+*.sublime-*
+*.code-workspace
+*.swp
+*~
+
+# Environment / secrets — never commit these even by accident.
+.env
+.env.local
+secrets/
+
+# Snapshot-test baselines must be tracked despite the global *.png ignore (none
+# at root today, but keep the carve-out so future ignores cannot inadvertently
+# strip baselines).
+!crates/app/tests/baselines/*.png

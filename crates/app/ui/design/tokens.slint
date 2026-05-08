@@ -1,0 +1,120 @@
+// Design tokens — ported from design/project/tokens.css.
+//
+// Source of truth: design/project/tokens.css. OKLCH literals are pre-converted
+// to sRGB hex via tools/oklch-to-srgb.js (culori 4.x; clipped to sRGB gamut)
+// because Slint colors are sRGB-only. The original OKLCH spec is preserved as
+// an inline comment next to each color so future re-conversions are auditable.
+//
+// Bundled fonts are auto-registered by the Slint compiler from the `import` lines below;
+// no Rust glue is required. See docs/adr/0007-design-system.md.
+//
+// Inter — SIL OFL 1.1; license at crates/app/assets/fonts/LICENSE.OFL.txt; attribution in LICENSE
+import "../../assets/fonts/Inter-Regular.ttf";
+// Inter — SIL OFL 1.1; license at crates/app/assets/fonts/LICENSE.OFL.txt; attribution in LICENSE
+import "../../assets/fonts/Inter-Medium.ttf";
+// Inter — SIL OFL 1.1; license at crates/app/assets/fonts/LICENSE.OFL.txt; attribution in LICENSE
+import "../../assets/fonts/Inter-SemiBold.ttf";
+// Inter — SIL OFL 1.1; license at crates/app/assets/fonts/LICENSE.OFL.txt; attribution in LICENSE
+import "../../assets/fonts/Inter-Bold.ttf";
+// JetBrains Mono — SIL OFL 1.1; license at crates/app/assets/fonts/LICENSE.OFL.txt; attribution in LICENSE
+import "../../assets/fonts/JetBrainsMono-Regular.ttf";
+
+export global DesignTokens {
+    // Selected at startup from the persisted setting (or the OS preference).
+    in-out property <bool> dark-mode: false;
+
+    // ─── Backgrounds & surfaces ──────────────────────────────────────────
+    out property <color> bg:        root.dark-mode ? #161618 : #f6f6f7;
+    out property <color> surface:   root.dark-mode ? #1d1d20 : #ffffff;
+    out property <color> surface-2: root.dark-mode ? #232327 : #fafafb;
+    out property <color> surface-3: root.dark-mode ? #2a2a2f : #f1f1f3;
+
+    // ─── Borders & dividers ──────────────────────────────────────────────
+    out property <color> border:        root.dark-mode ? #2f2f35 : #e2e2e6;
+    out property <color> border-strong: root.dark-mode ? #3d3d45 : #cfcfd4;
+    out property <color> divider:       root.dark-mode ? #2c2c32 : #dedee2;
+
+    // ─── Text shades ─────────────────────────────────────────────────────
+    out property <color> text:          root.dark-mode ? #ececef : #1a1a1d;
+    out property <color> text-2:        root.dark-mode ? #a8a8b0 : #515158;
+    out property <color> text-3:        root.dark-mode ? #74747c : #82828c;
+    out property <color> text-disabled: root.dark-mode ? #4a4a52 : #b4b4bc;
+
+    // ─── Accent (violet) family ──────────────────────────────────────────
+    // light: oklch(0.58 0.18 295)  /  dark: oklch(0.72 0.16 295)
+    out property <color> accent:        root.dark-mode ? #ad8dfd : #855dd7;
+    // light: oklch(0.52 0.19 295)  /  dark: oklch(0.78 0.17 295)
+    out property <color> accent-hover:  root.dark-mode ? #bda7ff : #7447c8;
+    // light: oklch(0.96 0.03 295)  /  dark: oklch(0.32 0.09 295)
+    out property <color> accent-soft:   root.dark-mode ? #37275b : #f2efff;
+    // light: oklch(0.85 0.08 295)  /  dark: oklch(0.42 0.12 295)
+    out property <color> accent-border: root.dark-mode ? #533c87 : #d1c4fd;
+    // light: oklch(0.42 0.18 295)  /  dark: oklch(0.82 0.13 295)
+    out property <color> accent-text:   root.dark-mode ? #c8b7ff : #582aa2;
+
+    // ─── Success ─────────────────────────────────────────────────────────
+    // light: oklch(0.62 0.14 155)  /  dark: oklch(0.72 0.14 155)
+    out property <color> success:      root.dark-mode ? #4ebe7d : #269e5f;
+    // light: oklch(0.95 0.04 155)  /  dark: oklch(0.30 0.06 155)
+    out property <color> success-soft: root.dark-mode ? #0f3620 : #daf7e3;
+    // light: oklch(0.42 0.13 155)  /  dark: oklch(0.80 0.12 155)
+    out property <color> success-text: root.dark-mode ? #7ad59c : #005d33;
+
+    // ─── Warning ─────────────────────────────────────────────────────────
+    // light: oklch(0.72 0.15 75)   /  dark: oklch(0.78 0.15 75)
+    out property <color> warning:      root.dark-mode ? #efa831 : #da950b;
+    // light: oklch(0.96 0.05 80)   /  dark: oklch(0.32 0.07 75)
+    out property <color> warning-soft: root.dark-mode ? #472d00 : #fff0d7;
+    // light: oklch(0.48 0.14 70)   /  dark: oklch(0.85 0.13 80)
+    out property <color> warning-text: root.dark-mode ? #fac463 : #825100;
+
+    // ─── Danger ──────────────────────────────────────────────────────────
+    // light: oklch(0.58 0.18 25)   /  dark: oklch(0.70 0.18 25)
+    out property <color> danger:      root.dark-mode ? #fa6863 : #cf4040;
+    // light: oklch(0.96 0.03 25)   /  dark: oklch(0.32 0.08 25)
+    out property <color> danger-soft: root.dark-mode ? #551f1d : #ffedeb;
+    // light: oklch(0.45 0.16 25)   /  dark: oklch(0.82 0.14 25)
+    out property <color> danger-text: root.dark-mode ? #ffaba3 : #9b1e22;
+
+    // ─── Muted (neutral grey 270°) ───────────────────────────────────────
+    // light: oklch(0.65 0.01 270)  /  dark: oklch(0.62 0.01 270)
+    out property <color> muted:      root.dark-mode ? #84868c : #8d8f95;
+    // light: oklch(0.95 0.005 270) /  dark: oklch(0.28 0.005 270)
+    out property <color> muted-soft: root.dark-mode ? #28292b : #edeef2;
+
+    // ─── Ad slot (UC 11) ─────────────────────────────────────────────────
+    out property <color> ad-slot-bg:       root.dark-mode ? #0d0d0f : #eaeaee;
+    out property <color> ad-slot-stripe-a: root.dark-mode ? #1a1a1d : #d8d8de;
+    out property <color> ad-slot-stripe-b: root.dark-mode ? #18181b : #d2d2d8;
+
+    // ─── Radii ───────────────────────────────────────────────────────────
+    out property <length> radius-sm: 4px;
+    out property <length> radius:    6px;
+    out property <length> radius-lg: 8px;
+
+    // ─── Icon sizes (UC 13) ──────────────────────────────────────────────
+    // Two-tier glyph size; consumed by Button and Icon primitives.
+    out property <length> icon-size:    14px;
+    out property <length> icon-size-sm: 12px;
+
+    // ─── Shadows (decomposed; consumers compose drop-shadow-* properties) ─
+    // tokens.css var(--shadow-sm)
+    out property <color>  shadow-sm-color:    root.dark-mode ? #00000066 : #0f0f140d;
+    out property <length> shadow-sm-blur:     2px;
+    out property <length> shadow-sm-offset-y: 1px;
+
+    // tokens.css var(--shadow-md) — Slint drop-shadow only supports a single
+    // shadow per Rectangle; we keep the dominant (larger) layer.
+    out property <color>  shadow-md-color:    root.dark-mode ? #00000073 : #0f0f1414;
+    out property <length> shadow-md-blur:     14px;
+    out property <length> shadow-md-offset-y: 4px;
+
+    // tokens.css var(--shadow-lg)
+    out property <color>  shadow-lg-color:    root.dark-mode ? #0000008c : #0f0f142e;
+    out property <length> shadow-lg-blur:     48px;
+    out property <length> shadow-lg-offset-y: 16px;
+
+    // ─── Font families ───────────────────────────────────────────────────
+    out property <string> font-ui-family:   "Inter";
+    out property <string> font-mono-family: "JetBrains Mono";
+}

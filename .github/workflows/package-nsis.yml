@@ -1,0 +1,116 @@
+# package-nsis.yml — referenced workflow for the NSIS .exe packaging leg
+# of UC 06's path-B installer matrix.
+name: package-nsis
+
+permissions: {}
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: 'cargo-dist plan JSON (passed by dist-generated release.yml)'
+        required: false
+        type: string
+
+jobs:
+  package:
+    name: NSIS installer
+    runs-on: windows-latest
+
+    env:
+      # Microsoft Evergreen WebView2 Bootstrapper — the URL is stable but
+      # Microsoft updates the binary in place periodically (it's the
+      # always-latest installer). The SHA pin protects against an attacker
+      # MITM'ing the download; if Microsoft rotates the bootstrapper, this
+      # job will fail loudly and the bump procedure (re-pin SHA + PR) is
+      # the same as for any other supply-chain pinned binary.
+      WEBVIEW2_BOOTSTRAPPER_URL: "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+      WEBVIEW2_BOOTSTRAPPER_SHA256: "5cb35e73342e3bdfea0293d1598a8e10d32d5fce78e55acb5ead00ab918e63fb"
+      YT_DLP_VERSION: "2026.04.21"
+      DENO_VERSION: "1.47.2"
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress --confirm
+
+      - name: Install GnuPG
+        run: choco install gnupg --no-progress --confirm
+
+      - name: Download WebView2 Evergreen Bootstrapper
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:WEBVIEW2_BOOTSTRAPPER_URL -OutFile MicrosoftEdgeWebview2Setup.exe -UseBasicParsing
+          $expected = $env:WEBVIEW2_BOOTSTRAPPER_SHA256
+          $actual = (Get-FileHash MicrosoftEdgeWebview2Setup.exe -Algorithm SHA256).Hash.ToLower()
+          if ($expected -ne $actual) {
+              Write-Error "WebView2 bootstrap SHA mismatch: expected $expected, got $actual"
+              exit 73
+          }
+
+      - name: Fetch yt-dlp + deno (re-fetch — fresh runner)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path runtime-deps | Out-Null
+          pwsh scripts/fetch-yt-dlp.ps1 -TargetTriple x86_64-pc-windows-msvc -OutputDir runtime-deps/
+          pwsh scripts/fetch-deno.ps1   -TargetTriple x86_64-pc-windows-msvc -OutputDir runtime-deps/
+
+      - name: Fetch ffmpeg (re-fetch — fresh runner)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path runtime-deps | Out-Null
+          pwsh scripts/fetch-ffmpeg.ps1 -TargetTriple x86_64-pc-windows-msvc -OutputDir runtime-deps/
+
+      - name: Pull cargo-dist build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: artifacts-build-local-x86_64-pc-windows-msvc
+          path: target/distrib/
+          merge-multiple: true
+
+      - name: Stage NSIS source dir
+        shell: pwsh
+        run: |
+          $src = 'nsis-src'
+          New-Item -ItemType Directory -Force -Path $src | Out-Null
+          # Extract the dist-built .zip archives.
+          Expand-Archive -LiteralPath 'target/distrib/app-x86_64-pc-windows-msvc.zip' -DestinationPath 'target/distrib/' -Force
+          Expand-Archive -LiteralPath 'target/distrib/ad-window-x86_64-pc-windows-msvc.zip' -DestinationPath 'target/distrib/' -Force
+          Copy-Item 'target/distrib/app-x86_64-pc-windows-msvc/app.exe'           "$src/yt-dlp-ui.exe"
+          Copy-Item 'target/distrib/ad-window-x86_64-pc-windows-msvc/ad-window.exe' "$src/ad-window.exe"
+          Copy-Item 'runtime-deps/yt-dlp' "$src/yt-dlp"
+          Copy-Item 'runtime-deps/deno'   "$src/deno"
+          Copy-Item 'runtime-deps/ffmpeg' "$src/ffmpeg"
+          Copy-Item 'runtime-deps/ffmpeg-LICENSE.txt' "$src/ffmpeg-LICENSE.txt"
+          Copy-Item 'installer/yt-dlp-LICENSE.txt'    "$src/yt-dlp-LICENSE.txt"
+          Copy-Item 'LICENSE'             "$src/LICENSE"
+
+      - name: Run makensis
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $src = (Resolve-Path 'nsis-src').Path
+          $bootstrap = (Resolve-Path 'MicrosoftEdgeWebview2Setup.exe').Path
+          & 'C:\Program Files (x86)\NSIS\makensis.exe' `
+              "/DPRODUCT_VERSION=$version" `
+              "/DSOURCE_DIR=$src" `
+              "/DWEBVIEW2_BOOTSTRAPPER=$bootstrap" `
+              installer\yt-dlp-ui.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with $LASTEXITCODE" }
+
+      - name: Smoke-test installer layout
+        shell: pwsh
+        run: |
+          pwsh installer/tests/test-nsis-extract.ps1 yt-dlp-ui-installer.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: artifacts-package-nsis
+          path: yt-dlp-ui-installer.exe

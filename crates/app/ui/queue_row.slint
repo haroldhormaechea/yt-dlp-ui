@@ -1,0 +1,443 @@
+// QueueRow — full row layout per design/project/queue-row.jsx.
+//
+// Layout: 14×16 padded flex strip with a 104×58 thumbnail at left, flexible
+// content column (title + badge, mono URL, optional progress / error / waiting
+// / done sub-row), and an action column on right with state-dependent buttons.
+//
+// The QueueRow struct is exported from `main_window.slint` and forms the
+// row data type passed to this component.
+
+import { DesignTokens } from "design/tokens.slint";
+import { Button, Badge, Icon } from "design/components.slint";
+import { Icons } from "icons.slint";
+import { Thumbnail } from "thumbnail.slint";
+
+// Maps a row's persisted `status` string to the Badge primitive's status
+// argument and the human-readable label. Kept inline so QueueRow stays a
+// single-file component.
+
+component ProgressBar inherits Rectangle {
+    in property <float> pct;
+    in property <string> status;
+
+    height: 4px;
+    border-radius: 2px;
+    background: DesignTokens.surface-3;
+    clip: true;
+
+    Rectangle {
+        x: 0;
+        y: 0;
+        height: parent.height;
+        width: parent.width * (root.pct / 100);
+        border-radius: parent.border-radius;
+        background: root.fill-color();
+        opacity: root.status == "cancelled" ? 0.5 : 1.0;
+        animate width { duration: 250ms; easing: ease-in-out; }
+    }
+
+    // Shimmer overlay — shown only for in_flight. Mirrors AC#23: a diagonal
+    // stripe Slint Image, theme-tinted via DesignTokens. The translate-X
+    // animation is approximated by a slow `x` toggle.
+    if root.status == "in_flight" : Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        Image {
+            x: shimmer-anim.x-shift;
+            y: 0;
+            width: parent.width + 17px;
+            height: parent.height;
+            source: DesignTokens.dark-mode ? Icons.shimmer-dark : Icons.shimmer-light;
+            image-fit: fill;
+            opacity: 0.6;
+        }
+
+        shimmer-anim := Rectangle {
+            property <length> x-shift: 0;
+            animate x-shift {
+                duration: 1200ms;
+                iteration-count: -1;
+                easing: linear;
+            }
+            states [
+                running when root.status == "in_flight": {
+                    x-shift: -17px;
+                }
+            ]
+        }
+    }
+
+    function fill-color() -> color {
+        if (root.status == "error") { return DesignTokens.danger; }
+        if (root.status == "cancelled") { return DesignTokens.text-disabled; }
+        return DesignTokens.accent;
+    }
+}
+
+// Canonical row struct — defined here (the lower-level component file) and
+// re-exported from main_window.slint as `QueueRow`. Owning the struct here
+// lets queue_row.slint stay free of any back-reference to main_window.slint
+// (which would create an import cycle). The Slint compiler treats this as
+// the single source of truth; the Rust side sees the same generated type.
+export struct QueueRow {
+    id: int,
+    url: string,
+    title: string,
+    title-status: string,
+    status: string,
+    progress-pct: float,
+    speed: string,
+    eta: string,
+    error-msg: string,
+    waiting-on-user: bool,
+    size: string,
+    downloaded: string,
+    dest-dir-display: string,
+    source: string,
+    seed: int,
+    thumbnail-path: image,
+    thumbnail-loaded: bool,
+}
+
+export component QueueRowDelegate inherits Rectangle {
+    in property <QueueRow> data;
+    in property <bool> hovered;
+
+    callback start-clicked(int);
+    callback cancel-clicked(int);
+    callback remove-clicked(int);
+    callback restart-clicked(int);
+
+    background: ta.has-hover ? DesignTokens.surface-2 : transparent;
+    border-color: DesignTokens.divider;
+    border-width: 0;
+    opacity: data.status == "cancelled" ? 0.62 : 1.0;
+
+    // Bottom 1px divider — Slint cannot do a bottom-only border on Rectangle,
+    // so we draw an inset line.
+    Rectangle {
+        x: 0;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: DesignTokens.divider;
+    }
+
+    ta := TouchArea {
+        // Empty touch-area covers the row to drive `has-hover` for the
+        // background change. Action buttons sit above it; their TouchAreas
+        // win for clicks (Slint event routing — innermost wins).
+        mouse-cursor: default;
+    }
+
+    HorizontalLayout {
+        min-height: 90px;
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 14px;
+        padding-bottom: 14px;
+        spacing: 14px;
+        alignment: stretch;
+
+        // Thumbnail.
+        Thumbnail {
+            seed: data.seed;
+            source: data.source;
+            real-image: data.thumbnail-path;
+            loaded: data.thumbnail-loaded;
+        }
+
+        // Content column.
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 5px;
+            alignment: start;
+
+            // Row 1 — title + badge.
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: stretch;
+
+                // Title block (with optional alert icon prefix on error rows).
+                // Wrapped in a Rectangle so the strikethrough overlay (used
+                // for cancelled rows because Slint 1.16.1 lacks
+                // `text-decoration-line`) can be absolutely positioned over
+                // the title Text.
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: transparent;
+
+                    HorizontalLayout {
+                        spacing: 6px;
+                        alignment: start;
+
+                        if data.status == "error" && data.title-status != "fetching" : Icon {
+                            source: Icons.alert;
+                            size: "sm";
+                            tint: DesignTokens.danger;
+                        }
+
+                        title-text := Text {
+                            text: data.title-status == "fetching" || data.title == "Fetching…" ? "Fetching…" : data.title;
+                            color: data.status == "cancelled" || data.status == "done" || data.status == "error"
+                                ? DesignTokens.text-2
+                                : DesignTokens.text;
+                            font-family: DesignTokens.font-ui-family;
+                            font-size: 13.5px;
+                            font-weight: 500;
+                            font-italic: data.title-status == "fetching" || data.title == "Fetching…";
+                            overflow: elide;
+                            wrap: no-wrap;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Strikethrough overlay for cancelled rows. 1-px line at
+                    // the title's vertical center (Slint 1.16.1 has no
+                    // text-decoration-line — see ADR 0008).
+                    if data.status == "cancelled" : Rectangle {
+                        x: 0;
+                        y: parent.height / 2;
+                        width: parent.width;
+                        height: 1px;
+                        background: DesignTokens.text-3;
+                    }
+                }
+
+                // Badge.
+                Badge {
+                    text: root.badge-label();
+                    status: root.badge-status();
+                }
+            }
+
+            // Row 2 — mono URL.
+            Text {
+                text: data.url;
+                color: DesignTokens.text-3;
+                font-family: DesignTokens.font-mono-family;
+                font-size: 11.5px;
+                overflow: elide;
+                wrap: no-wrap;
+            }
+
+            // Row 3 — progress sub-row (in_flight, cancelled, cancelling).
+            if data.status == "in_flight" || data.status == "cancelled" || data.status == "cancelling" : VerticalLayout {
+                spacing: 5px;
+                padding-top: 4px;
+
+                ProgressBar {
+                    pct: data.progress-pct;
+                    status: data.status;
+                }
+
+                HorizontalLayout {
+                    spacing: 14px;
+                    Text {
+                        text: root.format-pct(data.progress-pct);
+                        color: data.status == "in_flight" ? DesignTokens.text : (data.status == "cancelled" ? DesignTokens.text-3 : DesignTokens.text-2);
+                        font-family: DesignTokens.font-mono-family;
+                        font-size: 11px;
+                        font-weight: data.status == "in_flight" ? 500 : 400;
+                        vertical-alignment: center;
+                    }
+                    if data.downloaded != "" && data.size != "" : Text {
+                        text: data.downloaded + " / " + data.size;
+                        color: DesignTokens.text-2;
+                        font-family: DesignTokens.font-mono-family;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                    if data.status == "in_flight" && data.speed != "" : Text {
+                        text: data.speed;
+                        color: DesignTokens.text-2;
+                        font-family: DesignTokens.font-mono-family;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                    if data.status == "in_flight" && data.eta != "" : Text {
+                        text: "ETA " + data.eta;
+                        color: DesignTokens.text-2;
+                        font-family: DesignTokens.font-mono-family;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                    if data.status == "cancelled" : Text {
+                        text: "stopped";
+                        color: DesignTokens.text-3;
+                        font-family: DesignTokens.font-mono-family;
+                        font-size: 11px;
+                        font-italic: true;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Row 3 alt — error block. Capped at ~3 lines tall; the full
+            // error remains in the DB. yt-dlp stderr is multi-line warning
+            // chatter + a final ERROR: line, and rendering it untruncated
+            // makes each error row tower over the rest of the queue.
+            if data.status == "error" && data.error-msg != "" : Rectangle {
+                background: DesignTokens.danger-soft;
+                border-radius: 4px;
+                clip: true;
+                height: min(error-text.preferred-height + 10px, 60px);
+
+                error-text := Text {
+                    x: 8px;
+                    y: 5px;
+                    width: parent.width - 16px;
+                    text: data.error-msg;
+                    color: DesignTokens.danger-text;
+                    font-family: DesignTokens.font-ui-family;
+                    font-size: 11.5px;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Row 3 alt — waiting-on-user.
+            if data.waiting-on-user : HorizontalLayout {
+                spacing: 6px;
+                padding-top: 4px;
+                Icon {
+                    source: Icons.info;
+                    size: "sm";
+                    tint: DesignTokens.warning-text;
+                }
+                Text {
+                    text: "YouTube wants cookies — see dialog above.";
+                    color: DesignTokens.warning-text;
+                    font-family: DesignTokens.font-ui-family;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Row 3 alt — done meta (size + saved-to path).
+            if data.status == "done" : HorizontalLayout {
+                spacing: 14px;
+                padding-top: 2px;
+                HorizontalLayout {
+                    spacing: 3px;
+                    Icon {
+                        source: Icons.check;
+                        size: "sm";
+                        tint: DesignTokens.success-text;
+                    }
+                    Text {
+                        text: data.size != "" ? data.size : "saved";
+                        color: DesignTokens.success-text;
+                        font-family: DesignTokens.font-mono-family;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+                Text {
+                    text: data.dest-dir-display != "" ? "saved to " + data.dest-dir-display : "saved";
+                    color: DesignTokens.text-3;
+                    font-family: DesignTokens.font-mono-family;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Action column — non-Remove actions only (Download / Cancel /
+        // Restart / "Cancelling…"). The × Remove button lives in its own
+        // fixed slot after this column so it pins to the row's right edge
+        // and lines up vertically across all rows regardless of which
+        // other actions are present.
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+
+            // queued → Download (primary, icon=download) + Cancel.
+            if data.status == "queued" : Button {
+                text: "Download";
+                variant: "primary";
+                modifier: "sm";
+                icon: Icons.download;
+                clicked => { root.start-clicked(data.id); }
+            }
+            if data.status == "queued" : Button {
+                text: "Cancel";
+                modifier: "sm";
+                clicked => { root.cancel-clicked(data.id); }
+            }
+
+            // in_flight → Cancel (icon=stop).
+            if data.status == "in_flight" : Button {
+                text: "Cancel";
+                modifier: "sm";
+                icon: Icons.stop;
+                clicked => { root.cancel-clicked(data.id); }
+            }
+
+            // cancelling → single disabled "Cancelling…" button.
+            if data.status == "cancelling" : Button {
+                text: "Cancelling…";
+                modifier: "sm";
+                enabled: false;
+            }
+
+            // cancelled → Restart (icon=rotate).
+            if data.status == "cancelled" : Button {
+                text: "Restart";
+                modifier: "sm";
+                icon: Icons.rotate;
+                clicked => { root.restart-clicked(data.id); }
+            }
+
+            // waiting_on_user (transient) → Cancel.
+            if data.waiting-on-user : Button {
+                text: "Cancel";
+                modifier: "sm";
+                clicked => { root.cancel-clicked(data.id); }
+            }
+        }
+
+        // × Remove button — fixed-width slot at the row's right edge.
+        // Always rendered for terminal / interactive states; suppressed
+        // only while `cancelling` is in flight (the disabled
+        // "Cancelling…" button already monopolises the action area).
+        if data.status != "cancelling" : Button {
+            modifier: "icon-sm";
+            icon: Icons.x;
+            variant: "ghost";
+            clicked => { root.remove-clicked(data.id); }
+        }
+    }
+
+    function badge-label() -> string {
+        if (data.status == "queued")      { return "Queued"; }
+        if (data.status == "in_flight")   { return "Downloading"; }
+        if (data.status == "done")        { return "Done"; }
+        if (data.status == "cancelled")   { return "Cancelled"; }
+        if (data.status == "error")       { return "Error"; }
+        if (data.status == "cancelling")  { return "Cancelling…"; }
+        if (data.waiting-on-user)         { return "Waiting on you"; }
+        return data.status;
+    }
+
+    function badge-status() -> string {
+        if (data.waiting-on-user)         { return "waiting"; }
+        if (data.status == "queued")      { return "queued"; }
+        if (data.status == "in_flight")   { return "inflight"; }
+        if (data.status == "done")        { return "done"; }
+        if (data.status == "cancelled")   { return "cancelled"; }
+        if (data.status == "error")       { return "error"; }
+        if (data.status == "cancelling")  { return "cancelling"; }
+        return "queued";
+    }
+
+    function format-pct(p: float) -> string {
+        // Slint's number-to-string formatting only goes via concatenation;
+        // round to one decimal manually.
+        return floor(p * 10) / 10 + "%";
+    }
+}

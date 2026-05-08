@@ -1,0 +1,366 @@
+// About modal — UC 18.
+//
+// Centered overlay reusing the UC 10 bot-check-modal layered-Rectangle
+// shell: backdrop sibling + centered card, both rendered only when `open`
+// is true. Two views (summary + license detail) selected via the
+// `view` in-out property; the per-entry license is addressed by
+// `current-entry-index`.
+//
+// State reset on open uses the documented `states […]` pattern, mirroring
+// `bot_check_modal.slint:152-161`.
+
+import { ScrollView } from "std-widgets.slint";
+import { DesignTokens } from "design/tokens.slint";
+import { Button as DButton } from "design/components.slint";
+import { Icons } from "icons.slint";
+
+// One row in the licensed-software list. Slint structs are `value` types
+// with no Option support — `source-notice` uses an empty string sentinel
+// for "no notice" (e.g., "" for yt-dlp, populated for ffmpeg).
+export struct AboutEntry {
+    name: string,
+    version: string,
+    license-name: string,
+    license-text: string,
+    source-notice: string,
+}
+
+export component AboutModal inherits Rectangle {
+    in property <bool> open;
+    in property <string> app-version;
+    in property <[AboutEntry]> entries;
+
+    callback close-clicked();
+    callback open-ffmpeg-source();
+
+    // Two-view state. `summary` shows the entry list; `license` shows the
+    // full text of `entries[current-entry-index]`.
+    in-out property <string> view: "summary";
+    in-out property <int> current-entry-index: 0;
+
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // Reset transient view state on each open (UC 10 pattern). The user's
+    // <=> bindings override these declarations after the state-edge fires.
+    states [
+        closed when !root.open : {
+            view: "summary";
+            current-entry-index: 0;
+        }
+        open-state when root.open : {
+            view: "summary";
+            current-entry-index: 0;
+        }
+    ]
+
+    // Backdrop — clicking closes the modal. Sibling-rendered before the
+    // panel so the panel stacks above.
+    if root.open : Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #0a0a0f6b; // rgba(10, 10, 15, 0.42), matches UC 10
+        opacity: 1;
+        animate opacity { duration: 180ms; easing: cubic-bezier(0.2, 0.8, 0.3, 1); }
+
+        TouchArea {
+            clicked => { root.close-clicked(); }
+        }
+    }
+
+    // Centered card. Width 520 px to give the license text room to wrap
+    // without becoming a wall-of-prose; height is content-driven via the
+    // inner VerticalLayout.
+    if root.open : Rectangle {
+        width: 520px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        height: layout.preferred-height;
+        background: DesignTokens.surface;
+        border-color: DesignTokens.border;
+        border-width: 1px;
+        border-radius: 10px;
+        drop-shadow-color: DesignTokens.shadow-lg-color;
+        drop-shadow-blur: DesignTokens.shadow-lg-blur;
+        drop-shadow-offset-y: DesignTokens.shadow-lg-offset-y;
+
+        layout := VerticalLayout {
+            spacing: 0;
+
+            // ─── Header ─────────────────────────────────────────────
+            Rectangle {
+                background: transparent;
+                height: header-layout.preferred-height;
+
+                header-layout := HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 12px;
+                    padding-top: 16px;
+                    padding-bottom: 12px;
+                    spacing: 12px;
+                    alignment: stretch;
+
+                    VerticalLayout {
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: root.view == "license"
+                                ? root.license-title-for-current()
+                                : "About yt-dlp-ui";
+                            color: DesignTokens.text;
+                            font-family: DesignTokens.font-ui-family;
+                            font-size: 14.5px;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+
+                        if root.view == "summary" : Text {
+                            text: "Version " + root.app-version;
+                            color: DesignTokens.text-2;
+                            font-family: DesignTokens.font-ui-family;
+                            font-size: 12px;
+                        }
+                    }
+
+                    DButton {
+                        modifier: "icon-sm";
+                        variant: "ghost";
+                        icon: Icons.x;
+                        clicked => { root.close-clicked(); }
+                    }
+                }
+            }
+
+            // Header divider.
+            Rectangle { background: DesignTokens.divider; height: 1px; }
+
+            // ─── Body ───────────────────────────────────────────────
+            // Two views are mounted conditionally so each gets a fresh
+            // ScrollView/layout when the user toggles.
+            if root.view == "summary" : Rectangle {
+                background: transparent;
+                height: summary-layout.preferred-height;
+
+                summary-layout := VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 14px;
+                    padding-bottom: 6px;
+                    spacing: 8px;
+
+                    Text {
+                        text: "Bundled software and licenses";
+                        color: DesignTokens.text-2;
+                        font-family: DesignTokens.font-ui-family;
+                        font-size: 11.5px;
+                        font-weight: 600;
+                    }
+
+                    for entry[i] in root.entries : Rectangle {
+                        background: transparent;
+                        height: row-layout.preferred-height + 8px;
+
+                        // Bottom-divider on every row except the last.
+                        if i < root.entries.length - 1 : Rectangle {
+                            x: 0;
+                            y: parent.height - 1px;
+                            width: 100%;
+                            height: 1px;
+                            background: DesignTokens.divider;
+                        }
+
+                        row-layout := HorizontalLayout {
+                            padding-top: 4px;
+                            padding-bottom: 4px;
+                            spacing: 8px;
+                            alignment: stretch;
+
+                            VerticalLayout {
+                                spacing: 1px;
+                                horizontal-stretch: 1;
+
+                                Text {
+                                    text: entry.name;
+                                    color: DesignTokens.text;
+                                    font-family: DesignTokens.font-ui-family;
+                                    font-size: 13px;
+                                    font-weight: 500;
+                                }
+
+                                Text {
+                                    text: entry.version + " · " + entry.license-name;
+                                    color: DesignTokens.text-2;
+                                    font-family: DesignTokens.font-ui-family;
+                                    font-size: 11.5px;
+                                }
+                            }
+
+                            DButton {
+                                text: "View full license";
+                                modifier: "sm";
+                                variant: "ghost";
+                                clicked => {
+                                    root.current-entry-index = i;
+                                    root.view = "license";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.view == "license" : Rectangle {
+                background: transparent;
+                height: license-layout.preferred-height;
+
+                license-layout := VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 12px;
+                    padding-bottom: 8px;
+                    spacing: 10px;
+
+                    // Back row.
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+
+                        DButton {
+                            text: "← Back";
+                            modifier: "sm";
+                            variant: "ghost";
+                            clicked => { root.view = "summary"; }
+                        }
+                    }
+
+                    // License body (UC 15 ScrollView pattern: min/max-height
+                    // + stretch:0 to actually lock layout-child size).
+                    ScrollView {
+                        min-height: 320px;
+                        max-height: 480px;
+                        horizontal-stretch: 1;
+                        vertical-stretch: 0;
+
+                        Text {
+                            text: root.license-text-for-current();
+                            color: DesignTokens.text;
+                            font-family: DesignTokens.font-mono-family;
+                            font-size: 11.5px;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // ffmpeg LGPL § 4 source notice — only rendered when
+                    // the current entry carries a non-empty `source-notice`.
+                    if root.source-notice-for-current() != "" : Rectangle {
+                        background: DesignTokens.surface-2;
+                        border-color: DesignTokens.border;
+                        border-width: 1px;
+                        border-radius: 6px;
+                        height: source-layout.preferred-height + 16px;
+
+                        source-layout := VerticalLayout {
+                            padding: 10px;
+                            spacing: 4px;
+
+                            Text {
+                                text: "Source";
+                                color: DesignTokens.text;
+                                font-family: DesignTokens.font-ui-family;
+                                font-size: 11.5px;
+                                font-weight: 600;
+                            }
+
+                            Text {
+                                text: root.source-notice-for-current();
+                                color: DesignTokens.text-2;
+                                font-family: DesignTokens.font-ui-family;
+                                font-size: 11.5px;
+                                wrap: word-wrap;
+                            }
+
+                            // Clickable URL row, styled like the
+                            // settings-panel vendor-policy link
+                            // (settings_panel.slint:432-456).
+                            link-row := Rectangle {
+                                height: 18px;
+                                background: transparent;
+
+                                Text {
+                                    text: "https://ffmpeg.org/";
+                                    color: DesignTokens.accent-text;
+                                    font-family: DesignTokens.font-ui-family;
+                                    font-size: 11.5px;
+                                }
+
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.open-ffmpeg-source(); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ─── Footer ─────────────────────────────────────────────
+            Rectangle { background: DesignTokens.divider; height: 1px; }
+
+            Rectangle {
+                background: transparent;
+                height: footer-layout.preferred-height;
+
+                footer-layout := HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    spacing: 8px;
+                    alignment: stretch;
+
+                    Rectangle {
+                        background: transparent;
+                        horizontal-stretch: 1;
+                    }
+
+                    DButton {
+                        text: "Close";
+                        variant: "primary";
+                        clicked => { root.close-clicked(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // ─── Helpers ────────────────────────────────────────────────────────
+    // Slint's `for` produces an iteration scope with `entry[i]`; outside
+    // that scope we reach the current entry by indexing the model with
+    // `current-entry-index`. These helpers wrap that lookup so the body
+    // bindings stay readable.
+    pure function license-title-for-current() -> string {
+        if (root.entries.length == 0) {
+            return "";
+        }
+        return root.entries[root.current-entry-index].license-name + " — "
+            + root.entries[root.current-entry-index].name;
+    }
+
+    pure function license-text-for-current() -> string {
+        if (root.entries.length == 0) {
+            return "";
+        }
+        return root.entries[root.current-entry-index].license-text;
+    }
+
+    pure function source-notice-for-current() -> string {
+        if (root.entries.length == 0) {
+            return "";
+        }
+        return root.entries[root.current-entry-index].source-notice;
+    }
+}

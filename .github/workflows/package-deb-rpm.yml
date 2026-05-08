@@ -1,0 +1,156 @@
+# package-deb-rpm.yml — referenced workflow for the .deb + .rpm packaging
+# leg of UC 06's path-B installer matrix.
+#
+# Registered in dist-workspace.toml::ci.github.global-artifacts-jobs as
+# `./package-deb-rpm`. cargo-dist's `dist generate --mode ci` emits a
+# `custom-package-deb-rpm` job in release.yml that `uses:` this file,
+# gated to run after `build-local-artifacts` + `build-global-artifacts`
+# and before `host`.
+name: package-deb-rpm
+
+permissions: {}
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: 'cargo-dist plan JSON (passed by dist-generated release.yml)'
+        required: false
+        type: string
+
+jobs:
+  package:
+    name: nfpm package (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+
+    env:
+      # SHA256-pinned nfpm release. THREATS.md § supply-chain entry covers
+      # this binary's trust posture. Bumping requires editing both the
+      # version pin and the SHA below in the same PR.
+      NFPM_VERSION: "2.40.0"
+      NFPM_SHA256: "535962c4771db671352884b5591254481f851822557ad8476605c1e77a12504c"
+      # Pinned in ci/dist-build-setup.yml — duplicated here because each
+      # package job runs on a fresh runner with a fresh checkout (the
+      # `runtime-deps/` from build-local-artifacts does NOT survive).
+      YT_DLP_VERSION: "2026.04.21"
+      DENO_VERSION: "1.47.2"
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install nfpm (SHA256-pinned)
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz" -o nfpm.tgz
+          ACTUAL_SHA="$(sha256sum nfpm.tgz | awk '{print $1}')"
+          if [[ "${NFPM_SHA256}" != "${ACTUAL_SHA}" ]]; then
+              echo "nfpm SHA mismatch: expected ${NFPM_SHA256}, got ${ACTUAL_SHA}" >&2
+              exit 73
+          fi
+          tar xzf nfpm.tgz nfpm
+          sudo mv nfpm /usr/local/bin/nfpm
+          rm nfpm.tgz
+
+      - name: Fetch yt-dlp + deno (re-fetch — fresh runner)
+        env:
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          mkdir -p runtime-deps
+          bash scripts/fetch-yt-dlp.sh "${TARGET_TRIPLE}" runtime-deps/
+          bash scripts/fetch-deno.sh   "${TARGET_TRIPLE}" runtime-deps/
+
+      - name: Fetch ffmpeg (re-fetch — fresh runner)
+        env:
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          mkdir -p runtime-deps
+          bash scripts/fetch-ffmpeg.sh "${TARGET_TRIPLE}" runtime-deps/
+
+      - name: Pull cargo-dist build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: artifacts-build-local-${{ matrix.target }}
+          path: target/distrib/
+          merge-multiple: true
+
+      # cargo-dist's tar.xz archives contain `<app>/{app,ad-window,...}`.
+      # Extract them so nfpm.yaml's `target/<triple>/release/<bin>` source
+      # paths point at real files. This sidesteps coupling to dist's
+      # internal layout — we just want the binaries.
+      - name: Extract binaries from dist archives
+        env:
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p "target/${TARGET_TRIPLE}/release"
+          for archive in "target/distrib/app-${TARGET_TRIPLE}.tar.xz" "target/distrib/ad-window-${TARGET_TRIPLE}.tar.xz"; do
+              if [[ -f "${archive}" ]]; then
+                  tar -xJf "${archive}" -C target/distrib/
+              fi
+          done
+          # Move the extracted binaries to where nfpm.yaml expects them.
+          if [[ -f "target/distrib/app-${TARGET_TRIPLE}/app" ]]; then
+              mv "target/distrib/app-${TARGET_TRIPLE}/app" "target/${TARGET_TRIPLE}/release/app"
+          fi
+          if [[ -f "target/distrib/ad-window-${TARGET_TRIPLE}/ad-window" ]]; then
+              mv "target/distrib/ad-window-${TARGET_TRIPLE}/ad-window" "target/${TARGET_TRIPLE}/release/ad-window"
+          fi
+          chmod +x "target/${TARGET_TRIPLE}/release/app" "target/${TARGET_TRIPLE}/release/ad-window"
+
+      - name: nfpm package (.deb + .rpm)
+        env:
+          VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+          TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # Strip leading "v" from tag — nfpm wants pure semver.
+          export VERSION="${VERSION#v}"
+          mkdir -p dist-out
+          nfpm package --packager deb --config installer/nfpm.yaml --target dist-out/
+          nfpm package --packager rpm --config installer/nfpm.yaml --target dist-out/
+
+      - name: Smoke-test .deb layout
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          deb_files=(dist-out/*.deb)
+          if [[ ${#deb_files[@]} -eq 0 ]]; then
+              echo "no .deb produced under dist-out/" >&2
+              exit 1
+          fi
+          bash installer/tests/test-deb-layout.sh "${deb_files[0]}"
+
+      - name: Smoke-test .rpm layout (if rpm available)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          rpm_files=(dist-out/*.rpm)
+          if [[ ${#rpm_files[@]} -eq 0 ]]; then
+              echo "no .rpm produced under dist-out/" >&2
+              exit 1
+          fi
+          if command -v rpm >/dev/null 2>&1; then
+              bash installer/tests/test-rpm-layout.sh "${rpm_files[0]}"
+          else
+              echo "rpm not on this runner — skipping layout smoke (CI will catch on Fedora)"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: artifacts-package-deb-rpm-${{ matrix.arch }}
+          path: dist-out/*

@@ -1,0 +1,65 @@
+# cargo-deny policy for yt-dlp-ui.
+#
+# Run with:  cargo deny check
+#
+# This file enforces the license policy required by the PolyForm Noncommercial
+# 1.0.0 posture: no copyleft licenses (GPL family / SSPL) may enter the
+# dependency graph, because static linking would force open-sourcing the
+# application or violate the source-available license posture.
+#
+# Updated for cargo-deny 0.16+ schema.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+yanked = "warn"
+ignore = []
+
+[licenses]
+version = 2
+# SPDX identifiers that are permissive enough to embed in a non-commercial
+# Rust binary distribution without conflicting with the PolyForm NC posture.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+    "0BSD",
+    "BSL-1.0",
+]
+# Confidence threshold for license detection (0.0 - 1.0).
+confidence-threshold = 0.93
+
+# Crates that have an unusual or incorrect license declaration may need a
+# clarification entry here. None at scaffold time; add as the dep graph grows.
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+# Explicitly deny crates that are known to be problematic. Empty at scaffold
+# time; the dev-team can add entries as they discover supply-chain issues.
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

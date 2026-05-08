@@ -1,0 +1,63 @@
+// Empty state — shown in the queue list when there are no rows. Centered
+// 56×56 surface-3 card with download icon, headline, and a hint paragraph.
+// Port of design/project/app.jsx::EmptyState (~lines 411-444).
+
+import { DesignTokens } from "design/tokens.slint";
+import { Icons } from "icons.slint";
+
+export component EmptyState inherits Rectangle {
+    background: transparent;
+    min-height: 280px;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        padding: 24px;
+
+        // 56×56 download-icon card.
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 56px;
+                height: 56px;
+                border-radius: 12px;
+                background: DesignTokens.surface-3;
+                border-width: 1px;
+                border-color: DesignTokens.border;
+
+                Image {
+                    x: (parent.width - 22px) / 2;
+                    y: (parent.height - 22px) / 2;
+                    width: 22px;
+                    height: 22px;
+                    source: Icons.download;
+                    colorize: DesignTokens.text-2;
+                    image-fit: contain;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Headline.
+        Text {
+            text: "Queue is empty";
+            color: DesignTokens.text-2;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 13.5px;
+            font-weight: 500;
+            horizontal-alignment: center;
+        }
+
+        // Hint paragraph.
+        Text {
+            text: "Paste a video or playlist URL above to get started. Multi-line paste adds them all at once.";
+            color: DesignTokens.text-3;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 12px;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+            width: 320px;
+        }
+    }
+}

@@ -1,0 +1,705 @@
+// Reusable component primitives — port of the .btn / .input / .select / .badge
+// / .kbd rules in design/project/tokens.css.
+//
+// Each primitive binds its dynamic visuals to the `DesignTokens` global so a
+// `dark-mode` flip re-themes everything at runtime. UC 08–11 will consume
+// these; UC 07 only ships the foundation. Compile-only `if false : <Primitive>`
+// samples at the bottom of the file ensure the type-checker exercises every
+// primitive even before any caller references them.
+
+import { DesignTokens } from "tokens.slint";
+import { ComboBox } from "std-widgets.slint";
+
+export component Button inherits Rectangle {
+    in property <string> text;
+    // primary | default | ghost | danger
+    in property <string> variant: "default";
+    // ""    — full-height (28px)
+    // "sm"  — short      (24px)
+    // "icon"— square (28x28)
+    // "icon-sm" — square (24x24)
+    in property <string> modifier: "";
+    in property <bool> enabled: true;
+    // Optional leading icon — when set, renders before `text`. UC 08 addendum
+    // to ADR 0007: lets `Button` carry the SVG icons hand-authored under
+    // crates/app/assets/icons/ in addition to the existing text label.
+    in property <image> icon;
+    // UC 14: hover-state passthrough so callers can drive a sibling Tooltip's
+    // `target-hovered` without wrapping the Button in a parent TouchArea
+    // (which would either swallow clicks or compete with the internal `ta`
+    // for hit-testing).
+    out property <bool> hovered: ta.has-hover;
+    callback clicked();
+
+    height: root.modifier == "sm" || root.modifier == "icon-sm" ? 24px : 28px;
+    width: root.modifier == "icon"
+        ? 28px
+        : root.modifier == "icon-sm"
+            ? 24px
+            : self.preferred-width;
+    border-radius: DesignTokens.radius;
+    border-width: 1px;
+    background: root.bg-color();
+    border-color: root.border-color-resolved();
+
+    function bg-color() -> color {
+        if (!root.enabled) {
+            return DesignTokens.surface-2;
+        }
+        if (root.variant == "primary") {
+            return ta.pressed
+                ? DesignTokens.accent-hover
+                : (ta.has-hover ? DesignTokens.accent-hover : DesignTokens.accent);
+        }
+        if (root.variant == "ghost") {
+            return ta.has-hover ? DesignTokens.surface-3 : transparent;
+        }
+        if (root.variant == "danger" && ta.has-hover) {
+            return DesignTokens.danger-soft;
+        }
+        // default
+        if (ta.pressed) {
+            return DesignTokens.surface-2;
+        }
+        return ta.has-hover ? DesignTokens.surface-3 : DesignTokens.surface;
+    }
+
+    function border-color-resolved() -> color {
+        if (root.variant == "primary") {
+            return ta.has-hover ? DesignTokens.accent-hover : DesignTokens.accent;
+        }
+        if (root.variant == "ghost") {
+            return transparent;
+        }
+        if (root.variant == "danger" && ta.has-hover) {
+            return DesignTokens.danger;
+        }
+        return DesignTokens.border-strong;
+    }
+
+    function fg-color() -> color {
+        if (!root.enabled) {
+            return DesignTokens.text-disabled;
+        }
+        if (root.variant == "primary") {
+            return DesignTokens.dark-mode ? #14111c : white;
+        }
+        if (root.variant == "danger") {
+            return DesignTokens.danger-text;
+        }
+        return DesignTokens.text;
+    }
+
+    HorizontalLayout {
+        padding-left: root.modifier == "icon" || root.modifier == "icon-sm"
+            ? 0
+            : (root.modifier == "sm" ? 9px : 12px);
+        padding-right: root.modifier == "icon" || root.modifier == "icon-sm"
+            ? 0
+            : (root.modifier == "sm" ? 9px : 12px);
+        alignment: center;
+        spacing: 5px;
+        if root.icon.width > 0 : Image {
+            source: root.icon;
+            colorize: root.fg-color();
+            min-width: root.modifier == "sm" || root.modifier == "icon-sm"
+                ? DesignTokens.icon-size-sm
+                : DesignTokens.icon-size;
+            max-width: root.modifier == "sm" || root.modifier == "icon-sm"
+                ? DesignTokens.icon-size-sm
+                : DesignTokens.icon-size;
+            min-height: root.modifier == "sm" || root.modifier == "icon-sm"
+                ? DesignTokens.icon-size-sm
+                : DesignTokens.icon-size;
+            max-height: root.modifier == "sm" || root.modifier == "icon-sm"
+                ? DesignTokens.icon-size-sm
+                : DesignTokens.icon-size;
+            horizontal-stretch: 0;
+            vertical-stretch: 0;
+        }
+        if root.text != "" : Text {
+            text: root.text;
+            color: root.fg-color();
+            font-family: DesignTokens.font-ui-family;
+            font-size: root.modifier == "sm" || root.modifier == "icon-sm" ? 12px : 12.5px;
+            font-weight: root.variant == "primary" && DesignTokens.dark-mode ? 600 : 500;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// UC 13: Icon — non-interactive glyph primitive. Inherits Image directly
+// (rather than wrapping one) so layout positioning stays predictable: setting
+// `width`/`height` on a layout child gets ignored by Slint's layout engine,
+// but `min-*`/`max-*` together with stretch=0 force the layout to lock the
+// child at the token size. Inherited `source` is the canonical input (typed
+// `image`); `size` selects icon-size vs icon-size-sm; `tint` binds to
+// `colorize` so currentColor SVGs recolor without per-call boilerplate.
+export component Icon inherits Image {
+    in property <string> size: "";
+    in property <color> tint: DesignTokens.text;
+
+    min-width: root.size == "sm" ? DesignTokens.icon-size-sm : DesignTokens.icon-size;
+    max-width: root.size == "sm" ? DesignTokens.icon-size-sm : DesignTokens.icon-size;
+    min-height: root.size == "sm" ? DesignTokens.icon-size-sm : DesignTokens.icon-size;
+    max-height: root.size == "sm" ? DesignTokens.icon-size-sm : DesignTokens.icon-size;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    colorize: root.tint;
+}
+
+export component Input inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <bool> enabled: true;
+    callback edited(string);
+
+    height: 30px;
+    border-radius: DesignTokens.radius;
+    border-width: 1px;
+    border-color: ti.has-focus ? DesignTokens.accent : DesignTokens.border-strong;
+    background: DesignTokens.surface;
+
+    // Slint exposes drop-shadow-* on Rectangle; the focus ring uses the
+    // accent-soft color to mimic `box-shadow: 0 0 0 3px var(--accent-soft)`.
+    drop-shadow-color: ti.has-focus ? DesignTokens.accent-soft : transparent;
+    drop-shadow-blur: 3px;
+    drop-shadow-offset-y: 0;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        ti := TextInput {
+            text <=> root.text;
+            color: DesignTokens.text;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 13px;
+            single-line: true;
+            enabled: root.enabled;
+            vertical-alignment: center;
+            edited => { root.edited(self.text); }
+        }
+    }
+}
+
+export component Select inherits Rectangle {
+    in property <[string]> model;
+    in-out property <string> current-value;
+    in property <bool> enabled: true;
+    callback selected(string);
+
+    height: 28px;
+    width: cb.preferred-width;
+
+    // For the foundation we wrap std-widgets ComboBox so we get keyboard
+    // handling, accessibility, and a system-themed popup for free. UC 09
+    // adds the `enabled` passthrough so the cookies tab can disable the
+    // dropdown when no browsers are detected.
+    cb := ComboBox {
+        width: 100%;
+        height: 100%;
+        model: root.model;
+        current-value <=> root.current-value;
+        enabled: root.enabled;
+        selected(s) => { root.selected(s); }
+    }
+}
+
+export component Badge inherits Rectangle {
+    in property <string> text;
+    // queued | inflight | done | error | cancelled | cancelling | waiting
+    in property <string> status: "queued";
+
+    height: 19px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.status == "queued"
+        ? DesignTokens.border
+        : (root.status == "inflight" ? DesignTokens.accent-border : transparent);
+    background: root.bg-color();
+
+    function bg-color() -> color {
+        if (root.status == "inflight") { return DesignTokens.accent-soft; }
+        if (root.status == "done")     { return DesignTokens.success-soft; }
+        if (root.status == "error")    { return DesignTokens.danger-soft; }
+        if (root.status == "waiting")  { return DesignTokens.warning-soft; }
+        // queued | cancelled | cancelling
+        return DesignTokens.surface-3;
+    }
+
+    function fg-color() -> color {
+        if (root.status == "inflight") { return DesignTokens.accent-text; }
+        if (root.status == "done")     { return DesignTokens.success-text; }
+        if (root.status == "error")    { return DesignTokens.danger-text; }
+        if (root.status == "waiting")  { return DesignTokens.warning-text; }
+        if (root.status == "cancelled" || root.status == "cancelling") {
+            return DesignTokens.text-3;
+        }
+        return DesignTokens.text-2;
+    }
+
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        spacing: 5px;
+        alignment: center;
+
+        // Leading dot — pulses for `inflight` to mimic the @keyframes pulse
+        // rule in tokens.css.
+        dot := Rectangle {
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: root.status == "inflight" ? DesignTokens.accent : root.fg-color();
+            opacity: 1;
+            animate opacity {
+                duration: 1600ms;
+                iteration-count: root.status == "inflight" ? -1 : 1;
+                easing: ease-in-out;
+            }
+            states [
+                pulsing when root.status == "inflight" : {
+                    opacity: 0.35;
+                }
+            ]
+            y: (parent.height - self.height) / 2;
+        }
+
+        Text {
+            text: root.text;
+            color: root.fg-color();
+            font-family: DesignTokens.font-ui-family;
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.11px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component KbdHint inherits Rectangle {
+    in property <string> text;
+
+    height: 16px;
+    border-radius: 3px;
+    border-width: 1px;
+    border-color: DesignTokens.border;
+    background: DesignTokens.surface-3;
+
+    HorizontalLayout {
+        padding-left: 5px;
+        padding-right: 5px;
+        Text {
+            text: root.text;
+            color: DesignTokens.text-2;
+            font-family: DesignTokens.font-mono-family;
+            font-size: 10.5px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// UC 09: Toggle — 32×18 pill switch with an animated 14×14 thumb. Used by
+// the Privacy & Ads tab in the settings panel. The pill background animates
+// over 120 ms and the thumb position over 140 ms, both gated by `enabled`
+// so a disabled toggle does not animate when the bound value flips.
+export component Toggle inherits Rectangle {
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback toggled(bool);
+
+    height: 18px;
+
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: start;
+
+        pill := Rectangle {
+            width: 32px;
+            height: 18px;
+            border-radius: 9px;
+            background: !root.enabled
+                ? DesignTokens.surface-3
+                : (root.on ? DesignTokens.accent : DesignTokens.border-strong);
+            animate background {
+                duration: root.enabled ? 120ms : 0ms;
+                easing: ease-in-out;
+            }
+
+            thumb := Rectangle {
+                y: 2px;
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                background: white;
+                drop-shadow-color: #00000033;
+                drop-shadow-blur: 2px;
+                drop-shadow-offset-y: 1px;
+                x: root.on ? 16px : 2px;
+                animate x {
+                    duration: root.enabled ? 140ms : 0ms;
+                    easing: ease-in-out;
+                }
+            }
+
+            ta := TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: root.enabled ? pointer : default;
+                clicked => { root.toggled(!root.on); }
+            }
+        }
+
+        if root.label != "" : Text {
+            text: root.label;
+            color: DesignTokens.text-2;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 12.5px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// UC 09: Stepper — `−` button, gradient-filled track with a 14×14 thumb,
+// `+` button, mono numeric value. Used by the General tab's concurrency-cap
+// control. Boundary-clamps internally so a corrupt out-of-range starting
+// value cannot escape the [min, max] envelope.
+export component Stepper inherits Rectangle {
+    in property <int> value;
+    in property <int> min;
+    in property <int> max;
+    in property <bool> enabled: true;
+    callback changed(int);
+
+    height: 24px;
+
+    HorizontalLayout {
+        spacing: 10px;
+        alignment: stretch;
+
+        Button {
+            modifier: "icon-sm";
+            text: "−";
+            enabled: root.enabled && root.value > root.min;
+            clicked => {
+                // Clamp on emit defends against a corrupt starting value.
+                root.changed(root.value - 1 < root.min ? root.min : root.value - 1);
+            }
+        }
+
+        track := Rectangle {
+            horizontal-stretch: 1;
+            height: 4px;
+            border-radius: 2px;
+            background: DesignTokens.surface-3;
+            y: (parent.height - self.height) / 2;
+
+            // Fill — width proportional to (value - min) / (max - min).
+            // The conditional guards against a zero-range config.
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: root.max == root.min
+                    ? parent.width
+                    : parent.width * (root.value - root.min) / (root.max - root.min);
+                height: parent.height;
+                border-radius: 2px;
+                background: DesignTokens.accent;
+            }
+
+            // Thumb — 14×14 circle centred over the fill's leading edge.
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                background: DesignTokens.surface;
+                border-width: 1px;
+                border-color: DesignTokens.border-strong;
+                drop-shadow-color: DesignTokens.shadow-sm-color;
+                drop-shadow-blur: DesignTokens.shadow-sm-blur;
+                drop-shadow-offset-y: DesignTokens.shadow-sm-offset-y;
+                x: (root.max == root.min
+                        ? parent.width
+                        : parent.width * (root.value - root.min) / (root.max - root.min))
+                    - 7px;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        Button {
+            modifier: "icon-sm";
+            text: "+";
+            enabled: root.enabled && root.value < root.max;
+            clicked => {
+                root.changed(root.value + 1 > root.max ? root.max : root.value + 1);
+            }
+        }
+
+        Text {
+            width: 24px;
+            text: root.value;
+            color: DesignTokens.text;
+            font-family: DesignTokens.font-mono-family;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+}
+
+// UC 09: Tooltip — minimal hover-triggered popover. Drawn in the same
+// render layer as its parent (NOT a `PopupWindow`), so it overlaps siblings
+// inside the settings panel correctly. Position is `y: -32px` above the
+// parent by default; callers can override `y` if needed.
+export component Tooltip inherits Rectangle {
+    in property <string> text;
+    in property <bool> target-hovered;
+
+    y: -32px;
+    width: bubble.preferred-width;
+    height: bubble.preferred-height;
+    opacity: root.target-hovered ? 1 : 0;
+    animate opacity { duration: 100ms; }
+
+    bubble := Rectangle {
+        background: DesignTokens.surface-2;
+        border-color: DesignTokens.border;
+        border-width: 1px;
+        border-radius: 4px;
+
+        HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 6px;
+            padding-bottom: 6px;
+            Text {
+                text: root.text;
+                color: DesignTokens.text-2;
+                font-family: DesignTokens.font-ui-family;
+                font-size: 11px;
+            }
+        }
+    }
+}
+
+// UC 11: Toast — small reusable bottom-center notification with three
+// variants (info / warning / danger). The host owns the visibility flag and
+// auto-dismiss is handled by an internal Timer; the `dismissed` callback
+// fires when the timer elapses so the host can drop the entry from its
+// model. `kind` is a free-form string ("info" | "warning" | "danger") to
+// keep the Rust-side ToastEntry struct portable across Slint codegen.
+export component Toast inherits Rectangle {
+    in property <string> text;
+    in property <string> kind: "info";
+    in property <bool> visible-now;
+    in property <duration> auto-dismiss-ms: 3000ms;
+    callback dismissed();
+
+    height: layout.preferred-height;
+    border-radius: DesignTokens.radius;
+    background: root.bg-color();
+    drop-shadow-color: DesignTokens.shadow-md-color;
+    drop-shadow-blur:  DesignTokens.shadow-md-blur;
+    drop-shadow-offset-y: DesignTokens.shadow-md-offset-y;
+    opacity: visible-now ? 1 : 0;
+    animate opacity { duration: 200ms; easing: cubic-bezier(0.2, 0.8, 0.3, 1); }
+
+    function bg-color() -> color {
+        if (root.kind == "warning") { return DesignTokens.warning-soft; }
+        if (root.kind == "danger")  { return DesignTokens.danger-soft; }
+        return DesignTokens.text;
+    }
+
+    function fg-color() -> color {
+        if (root.kind == "warning") { return DesignTokens.warning-text; }
+        if (root.kind == "danger")  { return DesignTokens.danger-text; }
+        return DesignTokens.bg;
+    }
+
+    Timer {
+        interval: root.auto-dismiss-ms;
+        running: root.visible-now;
+        triggered => { root.dismissed(); }
+    }
+
+    layout := HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        Text {
+            text: root.text;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 12px;
+            font-weight: 500;
+            color: root.fg-color();
+        }
+    }
+}
+
+// Note: `text-decoration-line: line-through` is unsupported in Slint 1.16.1
+// — verbatim build error: "Unknown property text-decoration-line in Text".
+// Documented in docs/adr/0008-reskin-and-thumbnails.md. UC 08 falls back to
+// an overlaid 1-px Rectangle inside the title row of queue_row.slint to
+// approximate the strikethrough on cancelled titles. Re-test on a future
+// Slint version by re-introducing a `_StrikethroughSmoke` component here.
+
+// UC 13: rendered smoke surface for the icon snapshot test. The component
+// is a fixed-size Window so the snapshot test can render it via the software
+// renderer without instantiating MainWindow. Icon-bearing samples are
+// always rendered (visible to the renderer); the remaining primitive
+// type-check exercises stay behind the original `if false :` block so the
+// Slint compiler still touches every type without paying for them at render.
+import { Icons } from "../icons.slint";
+
+export component _ComponentSmoke inherits Window {
+    in property <bool> always-false: false;
+
+    width: 480px;
+    height: 380px;
+    background: DesignTokens.bg;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        alignment: start;
+
+        Button {
+            icon: Icons.plus;
+            text: "Sample";
+        }
+        Button {
+            icon: Icons.x;
+            modifier: "icon";
+        }
+        Button {
+            icon: Icons.play;
+            modifier: "sm";
+            text: "Play";
+        }
+        Icon {
+            source: Icons.alert;
+        }
+        Icon {
+            source: Icons.alert;
+            size: "sm";
+        }
+
+        // UC 13 follow-up — fake "row" layouts to visualise where the × slot
+        // ends up when the row's middle column has stretch=1 and the action
+        // column varies in width per row. The × must pin to the rightmost
+        // column across all three sample rows.
+        Rectangle {
+            background: DesignTokens.surface;
+            border-color: DesignTokens.border;
+            border-width: 1px;
+            height: 28px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                alignment: stretch;
+                Rectangle { width: 24px; height: 24px; background: DesignTokens.surface-3; }
+                Text { horizontal-stretch: 1; text: "row A — many actions"; vertical-alignment: center; color: DesignTokens.text; }
+                Badge { text: "Downloading"; status: "inflight"; }
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Button { text: "Download"; modifier: "sm"; variant: "primary"; }
+                    Button { text: "Cancel"; modifier: "sm"; }
+                }
+                Button { modifier: "icon-sm"; icon: Icons.x; variant: "ghost"; }
+            }
+        }
+        Rectangle {
+            background: DesignTokens.surface;
+            border-color: DesignTokens.border;
+            border-width: 1px;
+            height: 28px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                alignment: stretch;
+                Rectangle { width: 24px; height: 24px; background: DesignTokens.surface-3; }
+                Text { horizontal-stretch: 1; text: "row B — one action"; vertical-alignment: center; color: DesignTokens.text; }
+                Badge { text: "Error"; status: "error"; }
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Button { text: "Cancel"; modifier: "sm"; }
+                }
+                Button { modifier: "icon-sm"; icon: Icons.x; variant: "ghost"; }
+            }
+        }
+        Rectangle {
+            background: DesignTokens.surface;
+            border-color: DesignTokens.border;
+            border-width: 1px;
+            height: 28px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                alignment: stretch;
+                Rectangle { width: 24px; height: 24px; background: DesignTokens.surface-3; }
+                Text { horizontal-stretch: 1; text: "row C — no actions"; vertical-alignment: center; color: DesignTokens.text; }
+                Badge { text: "Done"; status: "done"; }
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                }
+                Button { modifier: "icon-sm"; icon: Icons.x; variant: "ghost"; }
+            }
+        }
+    }
+
+    if root.always-false : Button {
+        text: "Sample";
+        variant: "primary";
+        modifier: "sm";
+    }
+    if root.always-false : Input {
+        placeholder: "x";
+    }
+    if root.always-false : Select {
+        model: ["a", "b"];
+    }
+    if root.always-false : Select {
+        model: ["a", "b"];
+        enabled: false;
+    }
+    if root.always-false : Badge {
+        text: "queued";
+        status: "queued";
+    }
+    if root.always-false : KbdHint {
+        text: "⌘";
+    }
+    if root.always-false : Toggle {
+        on: true;
+        label: "smoke";
+    }
+    if root.always-false : Stepper {
+        value: 3;
+        min: 1;
+        max: 10;
+    }
+    if root.always-false : Tooltip {
+        text: "smoke";
+        target-hovered: false;
+    }
+    if root.always-false : Toast {
+        text: "smoke";
+        visible-now: true;
+    }
+}

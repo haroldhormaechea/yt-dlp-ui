@@ -1,0 +1,8 @@
+---
+source: crates/yt-dlp-bridge/src/format_test.rs
+expression: args
+---
+[
+    "-f",
+    "bestvideo+bestaudio/best",
+]

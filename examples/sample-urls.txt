@@ -1,0 +1,18 @@
+# Sample URLs for manual QA and integration tests.
+#
+# These are Creative Commons / public-domain media references suitable for
+# exercising the download queue without copyrighted content. Lines beginning
+# with `#` are comments; blank lines are ignored.
+#
+# IMPORTANT: hosts and exact URLs change over time. If a URL stops resolving,
+# replace it with a fresh CC-licensed equivalent rather than reaching for
+# copyrighted material.
+
+# Big Buck Bunny — Blender Foundation, CC BY 3.0.
+https://archive.org/details/BigBuckBunny_124
+
+# Sintel — Blender Foundation, CC BY 3.0.
+https://archive.org/details/Sintel
+
+# NASA archive (public domain, U.S. federal government work).
+https://archive.org/details/Apollo11_Launch

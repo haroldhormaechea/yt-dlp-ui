@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>yt-dlp-ui · design exploration</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="tokens.css">
+
+<style>
+  body { margin: 0; background: #f0eee9; }
+  /* Make the whole app fill its artboard */
+  .app-mount { position: absolute; inset: 0; }
+</style>
+
+<template id="__bundler_thumbnail">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <rect width="100" height="100" rx="14" fill="#5b3aa3"/>
+    <rect x="22" y="32" width="56" height="36" rx="4" fill="#fff" opacity="0.92"/>
+    <path d="M44 44 L60 50 L44 56 Z" fill="#5b3aa3"/>
+    <rect x="30" y="74" width="40" height="4" rx="2" fill="#fff" opacity="0.6"/>
+  </svg>
+</template>
+</head>
+
+<body>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="thumbnail.jsx"></script>
+<script type="text/babel" src="queue-row.jsx"></script>
+<script type="text/babel" src="settings-panel.jsx"></script>
+<script type="text/babel" src="bot-check-modal.jsx"></script>
+<script type="text/babel" src="os-frame.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// Each artboard hosts a fresh App instance with its own state
+const Mount = (props) => (
+  <div className="app-mount">
+    <App {...props} />
+  </div>
+);
+
+const Root = () => {
+  return (
+    <DesignCanvas>
+      <DCSection
+        id="intro"
+        title="yt-dlp-ui · desktop"
+        subtitle="Slint native app · macOS / Windows / Linux · light & dark"
+      >
+        <DCArtboard id="readme" label="Design notes" width={420} height={640}>
+          <ReadmeCard />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection
+        id="primary"
+        title="Main window — three platforms"
+        subtitle="Same app, native chrome on each OS. Mid-download, light theme."
+      >
+        <DCArtboard id="mac-light" label="macOS · light" width={920} height={680}>
+          <OSFrame os="macos" theme="light" width={920} height={680}>
+            <Mount initialTheme="light" scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+        <DCArtboard id="win-light" label="Windows 11 · light" width={920} height={680}>
+          <OSFrame os="windows" theme="light" width={920} height={680}>
+            <Mount initialTheme="light" scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+        <DCArtboard id="linux-light" label="Linux (GNOME) · light" width={920} height={680}>
+          <OSFrame os="linux" theme="light" width={920} height={680}>
+            <Mount initialTheme="light" scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection
+        id="dark"
+        title="Dark theme"
+        subtitle="Same scenarios in dark mode. Click the moon/sun icon in the add bar to swap."
+      >
+        <DCArtboard id="mac-dark" label="macOS · dark" width={920} height={680}>
+          <OSFrame os="macos" theme="dark" width={920} height={680}>
+            <Mount initialTheme="dark" scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+        <DCArtboard id="win-dark" label="Windows 11 · dark" width={920} height={680}>
+          <OSFrame os="windows" theme="dark" width={920} height={680}>
+            <Mount initialTheme="dark" scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+        <DCArtboard id="linux-dark" label="Linux (GNOME) · dark" width={920} height={680}>
+          <OSFrame os="linux" theme="dark" width={920} height={680}>
+            <Mount initialTheme="dark" scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection
+        id="settings"
+        title="Settings panel"
+        subtitle="Slides in from the right; main window dims behind. Three tabs: General · Cookies · Privacy & Ads."
+      >
+        <DCArtboard id="mac-settings" label="macOS · settings open" width={920} height={680}>
+          <OSFrame os="macos" theme="light" width={920} height={680}>
+            <Mount initialTheme="light" initialSettingsOpen scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+        <DCArtboard id="win-settings-dark" label="Windows · settings open · dark" width={920} height={680}>
+          <OSFrame os="windows" theme="dark" width={920} height={680}>
+            <Mount initialTheme="dark" initialSettingsOpen scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection
+        id="modal"
+        title="Bot-check recovery modal"
+        subtitle="Triggered when YouTube returns the 'sign in to confirm you're not a bot' error. One dialog batches all affected rows."
+      >
+        <DCArtboard id="mac-modal" label="macOS · modal open" width={920} height={680}>
+          <OSFrame os="macos" theme="light" width={920} height={680}>
+            <Mount initialTheme="light" initialModalOpen scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+        <DCArtboard id="linux-modal-dark" label="Linux · modal open · dark" width={920} height={680}>
+          <OSFrame os="linux" theme="dark" width={920} height={680}>
+            <Mount initialTheme="dark" initialModalOpen scenario="mixed" />
+          </OSFrame>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection
+        id="states"
+        title="Edge states"
+        subtitle="Empty queue. The mid-download scenario covers all the others (queued / fetching / cancelled / waiting / error / done) in one view above."
+      >
+        <DCArtboard id="empty-light" label="Empty · light" width={760} height={560}>
+          <OSFrame os="macos" theme="light" width={760} height={560}>
+            <Mount initialTheme="light" scenario="empty" />
+          </OSFrame>
+        </DCArtboard>
+        <DCArtboard id="empty-dark" label="Empty · dark" width={760} height={560}>
+          <OSFrame os="macos" theme="dark" width={760} height={560}>
+            <Mount initialTheme="dark" scenario="empty" />
+          </OSFrame>
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+};
+
+const ReadmeCard = () => (
+  <div
+    style={{
+      height: '100%', background: '#fff', borderRadius: 8,
+      padding: '20px 22px', fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize: 12.5, lineHeight: 1.55, color: '#2a2a2f',
+      boxShadow: '0 1px 2px rgba(0,0,0,0.05)', overflow: 'auto',
+      border: '1px solid #e2e2e6',
+    }}
+  >
+    <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>yt-dlp-ui</div>
+    <div style={{ fontSize: 11.5, color: '#82828c', marginBottom: 16 }}>
+      Slint desktop wrapper · single window · local-only
+    </div>
+
+    <Section title="Visual system">
+      <Bullet>Inter for UI, JetBrains Mono for URLs / numbers</Bullet>
+      <Bullet>Single accent — violet <code style={{fontFamily:'JetBrains Mono'}}>oklch(0.58 0.18 295)</code></Bullet>
+      <Bullet>Cool neutral grays, native-feeling controls</Bullet>
+      <Bullet>4.5:1 contrast on all text · 28–30px controls (touch-friendly w/o being mobile)</Bullet>
+    </Section>
+
+    <Section title="Layout">
+      <Bullet>Add bar (top, pinned)</Bullet>
+      <Bullet>Queue list (scrolls, fills)</Bullet>
+      <Bullet>Footer batch actions (pinned)</Bullet>
+      <Bullet>Bottom-strip ad slot, hidden in Focus mode</Bullet>
+    </Section>
+
+    <Section title="Row anatomy">
+      <Bullet>Thumbnail (104×58) · placeholder gradients labelled by source</Bullet>
+      <Bullet>Title + status badge · URL in mono · progress only when in-flight or cancelled</Bullet>
+      <Bullet>Per-state action set (Download · Cancel · Restart · Remove)</Bullet>
+      <Bullet>Cancelled rows greyed + strikethrough; last progress preserved</Bullet>
+    </Section>
+
+    <Section title="Try it">
+      <Bullet>Click the gear icon to open Settings</Bullet>
+      <Bullet>Click the moon/sun to flip theme inline</Bullet>
+      <Bullet>Click <em>Cancel all</em> in the footer for the toast</Bullet>
+      <Bullet>Click <em>Cancel</em> on an in-flight row → it greys out</Bullet>
+    </Section>
+
+    <Section title="Implementation notes">
+      <Bullet>Slint widgets map cleanly: <code>ListView</code> for the queue, <code>StandardButton</code> + <code>LineEdit</code>, <code>PopupWindow</code> for the modal</Bullet>
+      <Bullet>Ad slot is its own region — host the WebView there; toggle visibility with Focus mode</Bullet>
+      <Bullet>Keep status badges as a single Slint component — one prop, six states</Bullet>
+      <Bullet>Min window 600×400; this design holds at that size by stacking the footer button row</Bullet>
+    </Section>
+  </div>
+);
+const Section = ({ title, children }) => (
+  <div style={{ marginBottom: 14 }}>
+    <div style={{ fontSize: 11, fontWeight: 700, color: '#82828c', textTransform: 'uppercase', letterSpacing: 0.06, marginBottom: 6 }}>
+      {title}
+    </div>
+    {children}
+  </div>
+);
+const Bullet = ({ children }) => (
+  <div style={{ display: 'flex', gap: 8, marginBottom: 4, fontSize: 12 }}>
+    <div style={{ width: 4, height: 4, borderRadius: '50%', background: 'oklch(0.58 0.18 295)', marginTop: 7, flexShrink: 0 }} />
+    <div style={{ flex: 1 }}>{children}</div>
+  </div>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+</script>
+
+</body>
+</html>

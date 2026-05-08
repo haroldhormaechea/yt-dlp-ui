@@ -1,0 +1,35 @@
+// Icon registry — exposes every hand-authored SVG under
+// crates/app/assets/icons/ as a static `image` property on a single global, so
+// callers can write `Icons.download` rather than repeating per-file `@image-url`
+// invocations. All icons are stroke-only with `stroke="currentColor"`, so any
+// caller can recolor them via `Image::colorize`.
+
+export global Icons {
+    out property <image> link:       @image-url("../assets/icons/link.svg");
+    out property <image> plus:       @image-url("../assets/icons/plus.svg");
+    out property <image> download:   @image-url("../assets/icons/download.svg");
+    out property <image> stop:       @image-url("../assets/icons/stop.svg");
+    out property <image> rotate:     @image-url("../assets/icons/rotate.svg");
+    out property <image> x:          @image-url("../assets/icons/x.svg");
+    out property <image> play:       @image-url("../assets/icons/play.svg");
+    out property <image> alert:      @image-url("../assets/icons/alert.svg");
+    out property <image> info:       @image-url("../assets/icons/info.svg");
+    out property <image> check:      @image-url("../assets/icons/check.svg");
+    out property <image> gear:       @image-url("../assets/icons/gear.svg");
+    out property <image> menu:       @image-url("../assets/icons/menu.svg");
+    out property <image> moon:       @image-url("../assets/icons/moon.svg");
+    out property <image> sun:        @image-url("../assets/icons/sun.svg");
+    out property <image> globe:      @image-url("../assets/icons/globe.svg");
+    out property <image> youtube:    @image-url("../assets/icons/youtube.svg");
+    out property <image> vimeo:      @image-url("../assets/icons/vimeo.svg");
+    out property <image> soundcloud: @image-url("../assets/icons/soundcloud.svg");
+    out property <image> bandcamp:   @image-url("../assets/icons/bandcamp.svg");
+    out property <image> shield:     @image-url("../assets/icons/shield.svg");
+    out property <image> folder:     @image-url("../assets/icons/folder.svg");
+    out property <image> shimmer-light: @image-url("../assets/icons/_shimmer-stripe-light.svg");
+    out property <image> shimmer-dark:  @image-url("../assets/icons/_shimmer-stripe-dark.svg");
+    out property <image> eye:          @image-url("../assets/icons/eye.svg");
+    out property <image> stripe-light: @image-url("../assets/icons/_stripe-light.svg");
+    out property <image> stripe-dark:  @image-url("../assets/icons/_stripe-dark.svg");
+}
+

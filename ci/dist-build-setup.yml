@@ -1,0 +1,64 @@
+# dist-build-setup.yml — pre-build hook spliced into cargo-dist's
+# `build-local-artifacts` job via `dist-workspace.toml::github-build-setup`.
+#
+# Survives `dist generate --mode ci`. Edit this file (NOT the regenerated
+# release.yml) when changing release-time fetch behavior or pinned
+# upstream-binary versions.
+#
+# Schema (cargo-dist 0.31.0): top-level YAML sequence of GHA-step maps.
+# No top-level `env:` block; per-step `env:` is honored. The pinned
+# YT_DLP_VERSION / DENO_VERSION are repeated on each step that needs them.
+# Bumping is a manual PR — see scripts/README.md § Bump procedure.
+
+- name: Fetch yt-dlp + deno (Linux/macOS)
+  if: runner.os == 'Linux' || runner.os == 'macOS'
+  shell: bash
+  env:
+    YT_DLP_VERSION: "2026.04.21"
+    DENO_VERSION: "1.47.2"
+  run: |
+    mkdir -p runtime-deps
+    bash scripts/fetch-yt-dlp.sh "${{ matrix.targets[0] }}" runtime-deps/
+    bash scripts/fetch-deno.sh   "${{ matrix.targets[0] }}" runtime-deps/
+
+# UC 17: ffmpeg fetch. Linux uses the BtbN LGPL-only prebuilt; macOS
+# builds from upstream FFmpeg source (no LGPL-only mainstream macOS
+# prebuilt exists). Pins live in scripts/runtime-deps-pins.env so the
+# ffmpeg version is NOT repeated as inline env: here (single source of
+# truth for the SHA pin).
+- name: Fetch ffmpeg (Linux)
+  if: runner.os == 'Linux'
+  shell: bash
+  run: |
+    mkdir -p runtime-deps
+    bash scripts/fetch-ffmpeg.sh "${{ matrix.targets[0] }}" runtime-deps/
+
+- name: Build ffmpeg (macOS, LGPL-only, from source)
+  if: runner.os == 'macOS'
+  shell: bash
+  run: |
+    mkdir -p runtime-deps
+    bash scripts/build-ffmpeg-macos.sh runtime-deps/
+
+- name: Install GnuPG (Windows)
+  if: runner.os == 'Windows'
+  shell: pwsh
+  run: choco install gnupg --no-progress --confirm
+
+- name: Fetch yt-dlp + deno (Windows)
+  if: runner.os == 'Windows'
+  shell: pwsh
+  env:
+    YT_DLP_VERSION: "2026.04.21"
+    DENO_VERSION: "1.47.2"
+  run: |
+    New-Item -ItemType Directory -Force -Path runtime-deps | Out-Null
+    pwsh scripts/fetch-yt-dlp.ps1 -TargetTriple "${{ matrix.targets[0] }}" -OutputDir runtime-deps/
+    pwsh scripts/fetch-deno.ps1   -TargetTriple "${{ matrix.targets[0] }}" -OutputDir runtime-deps/
+
+- name: Fetch ffmpeg (Windows)
+  if: runner.os == 'Windows'
+  shell: pwsh
+  run: |
+    New-Item -ItemType Directory -Force -Path runtime-deps | Out-Null
+    pwsh scripts/fetch-ffmpeg.ps1 -TargetTriple "${{ matrix.targets[0] }}" -OutputDir runtime-deps/

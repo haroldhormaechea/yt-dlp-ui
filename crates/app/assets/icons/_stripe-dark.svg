@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 48" preserveAspectRatio="none">
+  <defs>
+    <pattern id="diag" patternUnits="userSpaceOnUse" width="17" height="17"
+             patternTransform="rotate(115)">
+      <rect width="8" height="17" fill="#1a1a1d"/>
+      <rect x="8" width="9" height="17" fill="#18181b"/>
+    </pattern>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#diag)"/>
+</svg>

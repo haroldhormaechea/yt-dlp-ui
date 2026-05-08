@@ -1,0 +1,11 @@
+---
+source: crates/yt-dlp-bridge/src/format_test.rs
+expression: args
+---
+[
+    "-f",
+    "bestaudio[ext=m4a]/bestaudio[ext=mp4]/bestaudio",
+    "-x",
+    "--audio-format",
+    "m4a",
+]

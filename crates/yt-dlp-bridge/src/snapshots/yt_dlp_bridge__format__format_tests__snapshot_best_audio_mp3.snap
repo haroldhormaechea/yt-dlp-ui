@@ -1,0 +1,9 @@
+---
+source: crates/yt-dlp-bridge/src/format_test.rs
+expression: args
+---
+[
+    "-x",
+    "--audio-format",
+    "mp3",
+]

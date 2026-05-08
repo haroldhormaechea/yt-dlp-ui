@@ -1,0 +1,30 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.31.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = []
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# UC 06 — bundled-binary `include` list. Two entries (canonical-name approach,
+# Smoke 1 outcome): cargo-dist 0.31.0's `include` is a single global list and
+# fails the build on missing entries, so fetch scripts produce a single
+# `yt-dlp` / `deno` filename on every OS, including Windows. The Windows
+# branch of paths.rs probes <bin>.exe first then falls back to <bin>.
+include = ["runtime-deps/yt-dlp", "runtime-deps/deno", "runtime-deps/ffmpeg", "runtime-deps/ffmpeg-LICENSE.txt"]
+# UC 06 — pre-build hook spliced into build-local-artifacts. Fetches the
+# upstream yt-dlp + deno binaries into runtime-deps/ before cargo-dist
+# packages each archive. Versions are pinned inside that YAML's `env:`
+# block (NOT in release.yml, which `dist generate --mode ci` regenerates).
+github-build-setup = "../../ci/dist-build-setup.yml"
+# UC 06 — global-artifacts-jobs splice. Each entry references a workflow
+# under .github/workflows/. cargo-dist emits a `custom-<name>` job in the
+# generated release.yml that `uses:` the file, gated to run after
+# build-local-artifacts + build-global-artifacts and before host. This is
+# the only post-build splice cargo-dist 0.31.0 exposes.
+global-artifacts-jobs = ["./package-deb-rpm", "./package-nsis", "./package-dmg"]

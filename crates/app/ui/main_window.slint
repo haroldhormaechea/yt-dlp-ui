@@ -1,0 +1,531 @@
+// Slint UI markup for the yt-dlp-ui main window.
+//
+// Compiled at build time via crates/app/build.rs (slint_build::compile).
+// The generated Rust types are pulled into lib.rs via slint::include_modules!().
+//
+// UC 08 reskin: the shell is split into add_bar.slint, queue_row.slint,
+// footer.slint, empty_state.slint, thumbnail.slint, and icons.slint. This
+// file owns the window-level wiring (queue model, settings panel, bot-check
+// popup, deno banner, flash) and re-themes everything via DesignTokens.
+
+import { ListView } from "std-widgets.slint";
+import { DesignTokens } from "design/tokens.slint";
+import { Button as DButton, Toast, Icon, _ComponentSmoke } from "design/components.slint";
+import { Icons } from "icons.slint";
+import { AddBar } from "add_bar.slint";
+import { QueueRowDelegate, QueueRow } from "queue_row.slint";
+import { Footer } from "footer.slint";
+import { EmptyState } from "empty_state.slint";
+import { SettingsPanel } from "settings_panel.slint";
+import { BotCheckModal } from "bot_check_modal.slint";
+import { AboutModal, AboutEntry } from "about_modal.slint";
+export { DesignTokens, QueueRow, _ComponentSmoke, AboutEntry }
+
+// UC 11: ToastEntry — one row per toast in the in-memory model the host
+// (Rust ui_bridge) owns. Lives at module scope so Slint codegen produces a
+// public `ToastEntry` Rust struct.
+export struct ToastEntry {
+    id: int,
+    text: string,
+    kind: string,
+    visible-now: bool,
+}
+
+export component MainWindow inherits Window {
+    title: "yt-dlp-ui";
+    preferred-width: 720px;
+    preferred-height: 600px;
+    background: DesignTokens.bg;
+
+    in-out property <[QueueRow]> queue;
+    in-out property <string> flash-message: "";
+    in-out property <string> flash-kind: "info";
+    in-out property <string> dest-dir-display: "";
+    in-out property <string> format-pref: "BestHeuristic";
+    in-out property <bool> settings-open: false;
+    in-out property <[string]> cookies-options: ["None"];
+    in-out property <string> cookies-browser: "None";
+    in-out property <bool> cookies-empty: false;
+    in-out property <bool> focus-mode: false;
+    in-out property <bool> ads-personalized: true;
+    in-out property <string> vendor-privacy-url: "";
+    in-out property <int> concurrency-cap: 3;
+    in-out property <[string]> bot-check-options;
+    in-out property <bool> bot-check-open: false;
+    in-out property <int> bot-check-affected-count: 0;
+    in-out property <string> bot-check-default-pick: "";
+    in-out property <string> bot-check-last-pick: "";
+    // Per-browser detection flags (UC 10) — set by the Rust ui_bridge from
+    // the same detected list as `bot-check-options`. Drive per-row
+    // visibility inside the modal without a Slint-side membership scan.
+    in-out property <bool> bot-check-has-brave: false;
+    in-out property <bool> bot-check-has-chrome: false;
+    in-out property <bool> bot-check-has-chromium: false;
+    in-out property <bool> bot-check-has-edge: false;
+    in-out property <bool> bot-check-has-firefox: false;
+    in-out property <bool> bot-check-has-opera: false;
+    in-out property <bool> bot-check-has-safari: false;
+    in-out property <bool> bot-check-has-vivaldi: false;
+    in-out property <bool> deno-warning-visible: false;
+
+    // UC 18: About modal state. `about-entries` is seeded by ui_bridge from
+    // `about::entries()`; `app-version` mirrors `env!("CARGO_PKG_VERSION")`.
+    in-out property <bool> about-open: false;
+    in-out property <[AboutEntry]> about-entries: [];
+    in-out property <string> app-version: "";
+
+    // UC 11: toast overlay model — Rust ui_bridge pushes/pops entries via the
+    // Slint VecModel API. Visibility is host-controlled (the in-memory entry
+    // carries `visible-now`); `dismiss-toast(id)` is invoked from each Toast
+    // when its 3 s timer elapses.
+    in-out property <[ToastEntry]> toasts: [];
+    callback dismiss-toast(int);
+
+    // Footer counts + concurrency cap. Recomputed in Rust on each
+    // RowUpserted / RowRemoved event (ui_bridge::recompute_counts).
+    in-out property <int> active-count: 0;
+    in-out property <int> queued-count: 0;
+    in-out property <int> done-count: 0;
+    in-out property <int> waiting-count: 0;
+    in-out property <int> cap: 3;
+    // UC 14: Start-all broadening — `cancelled-count` + `error-count` widen
+    // the enable predicate; `start-all-busy` gates re-entry while the batch
+    // is in flight; `start-all-tooltip` carries the pre-rendered hover text
+    // (segment-omission logic owned by ui_bridge).
+    in-out property <int> cancelled-count: 0;
+    in-out property <int> error-count: 0;
+    in-out property <bool> start-all-busy: false;
+    in-out property <string> start-all-tooltip: "";
+
+    // UC 19: second arg is the AddBar's per-URL "Audio only" flag.
+    callback add-urls(string, bool);
+    // UC 14: renamed from `start-all-queued` — the action now also resumes
+    // `cancelled` and retries `error` rows in addition to starting `queued`.
+    callback start-all();
+    callback cancel-all();
+    callback start-one(int);
+    callback cancel-clicked(int);
+    callback remove-clicked(int);
+    callback restart-clicked(int);
+    callback pick-destination-dir();
+    callback set-format-pref(string);
+    callback set-cookies-browser(string);
+    callback set-concurrency-cap(int);
+    callback set-focus-mode(bool);
+    callback set-ads-personalized(bool);
+    callback open-vendor-privacy-policy();
+    callback bot-check-pick(string, bool);
+    callback bot-check-cancel();
+    callback toggle-theme();
+    // UC 18: opens the ffmpeg source URL in the system default browser.
+    callback open-ffmpeg-source();
+
+    // Top-level FocusScope captures ESC and consumes the event when the
+    // settings panel is open so it does not propagate to the main window
+    // (or to any other key-handler in the tree).
+    FocusScope {
+        width: 100%;
+        height: 100%;
+
+        key-pressed(event) => {
+            // ESC routing — modal takes precedence over the settings panel
+            // because the bot-check is a "user must act" overlay; if it is
+            // open it is layered above the settings panel anyway.
+            if (event.text == Key.Escape && root.bot-check-open) {
+                root.bot-check-open = false;
+                root.bot-check-cancel();
+                return accept;
+            }
+            // UC 18: About modal Esc — slots between bot-check (highest)
+            // and settings-panel so an About-on-top-of-Settings stack
+            // closes inside-out.
+            if (event.text == Key.Escape && root.about-open) {
+                root.about-open = false;
+                return accept;
+            }
+            if (event.text == Key.Escape && root.settings-open) {
+                root.settings-open = false;
+                return accept;
+            }
+            return reject;
+        }
+
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: transparent;
+
+    VerticalLayout {
+        spacing: 0;
+
+        // Add bar.
+        AddBar {
+            add-clicked => {
+                root.add-urls(self.value, self.audio-only-on);
+                self.value = "";
+                // UC 19 / AC #6: defense-in-depth reset alongside the
+                // AddBar's own `changed value` handler.
+                self.audio-only-on = false;
+            }
+            toggle-theme-clicked => {
+                DesignTokens.dark-mode = !DesignTokens.dark-mode;
+                root.toggle-theme();
+            }
+            gear-clicked => { root.settings-open = !root.settings-open; }
+        }
+
+        // Border below add bar.
+        Rectangle { background: DesignTokens.border; height: 1px; }
+
+        // Deno banner (UC 11). Restyled with `warning-soft` background, an
+        // inline mono `brew install deno` chip, a 1-px bottom border, and a
+        // session-only ghost-`×` dismiss button. Banner reappears next launch
+        // if the deno probe still fails — no KV key is persisted.
+        if root.deno-warning-visible : Rectangle {
+            background: DesignTokens.warning-soft;
+
+            VerticalLayout {
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    padding-top: 7px;
+                    padding-bottom: 7px;
+                    spacing: 6px;
+                    alignment: stretch;
+
+                    Icon {
+                        source: Icons.info;
+                        size: "sm";
+                        tint: DesignTokens.warning-text;
+                    }
+                    Text {
+                        text: "Some YouTube downloads may require Deno.";
+                        color: DesignTokens.warning-text;
+                        font-family: DesignTokens.font-ui-family;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                    }
+                    Rectangle {
+                        background: #00000010;
+                        border-radius: 3px;
+                        width: chip-text.preferred-width + 10px;
+                        chip-text := Text {
+                            text: "brew install deno";
+                            color: DesignTokens.warning-text;
+                            font-family: DesignTokens.font-mono-family;
+                            font-size: 11.5px;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            x: 5px;
+                            y: 1px;
+                        }
+                    }
+                    Text {
+                        text: "(or platform equivalent).";
+                        color: DesignTokens.warning-text;
+                        font-family: DesignTokens.font-ui-family;
+                        font-size: 11.5px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    DButton {
+                        modifier: "icon-sm";
+                        variant: "ghost";
+                        icon: Icons.x;
+                        clicked => {
+                            root.deno-warning-visible = false;
+                        }
+                    }
+                }
+                Rectangle { background: DesignTokens.border; height: 1px; }
+            }
+        }
+
+        // Flash strip.
+        if root.flash-message != "" : Rectangle {
+            height: 24px;
+            background: root.flash-kind == "error" ? DesignTokens.danger-soft
+                        : root.flash-kind == "duplicate" ? DesignTokens.warning-soft
+                        : DesignTokens.success-soft;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                Text {
+                    text: root.flash-message;
+                    color: root.flash-kind == "error" ? DesignTokens.danger-text
+                                : root.flash-kind == "duplicate" ? DesignTokens.warning-text
+                                : DesignTokens.success-text;
+                    font-family: DesignTokens.font-ui-family;
+                    font-size: 11.5px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Queue list (scrollable, takes remaining vertical space).
+        Rectangle {
+            background: DesignTokens.surface;
+            vertical-stretch: 1;
+
+            TouchArea {
+                queue-focus := FocusScope {
+                    property <length> row-step: 90px;
+
+                    pure function clamp-y(y: length, viewport-h: length, content-h: length) -> length {
+                        max(min(y, 0px), min(viewport-h - content-h, 0px))
+                    }
+
+                    key-pressed(event) => {
+                        if (event.text == Key.UpArrow) {
+                            list.viewport-y = clamp-y(
+                                list.viewport-y + self.row-step,
+                                list.visible-height,
+                                list.viewport-height
+                            );
+                            return accept;
+                        }
+                        if (event.text == Key.DownArrow) {
+                            list.viewport-y = clamp-y(
+                                list.viewport-y - self.row-step,
+                                list.visible-height,
+                                list.viewport-height
+                            );
+                            return accept;
+                        }
+                        return reject;
+                    }
+
+                    list := ListView {
+                        visible: root.queue.length > 0;
+
+                        for row[i] in root.queue : QueueRowDelegate {
+                            data: row;
+                            start-clicked(id)   => { root.start-one(id); }
+                            cancel-clicked(id)  => { root.cancel-clicked(id); }
+                            remove-clicked(id)  => { root.remove-clicked(id); }
+                            restart-clicked(id) => { root.restart-clicked(id); }
+                        }
+
+                        changed viewport-height => {
+                            self.viewport-y = parent.clamp-y(
+                                self.viewport-y,
+                                self.visible-height,
+                                self.viewport-height
+                            );
+                        }
+                    }
+
+                    if root.queue.length == 0 : EmptyState {}
+                }
+            }
+        }
+
+        // Border above footer.
+        Rectangle { background: DesignTokens.border; height: 1px; }
+
+        // Footer.
+        Footer {
+            active-count: root.active-count;
+            queued-count: root.queued-count;
+            done-count: root.done-count;
+            waiting-count: root.waiting-count;
+            cap: root.cap;
+            cancelled-count: root.cancelled-count;
+            error-count: root.error-count;
+            start-all-busy: root.start-all-busy;
+            tooltip-text: root.start-all-tooltip;
+            start-all-clicked => { root.start-all(); }
+            cancel-all-clicked => { root.cancel-all(); }
+        }
+
+        // UC 11: Ad-slot region — 64-px-tall placeholder pinned below the
+        // footer; hidden when focus_mode is on (UC 09's KV key). The actual
+        // `ad-window` helper-process integration is out of scope; this UC
+        // ships the visual chrome only. When the helper is later wired up,
+        // replace the inner stripe rectangle with its WebView render and
+        // keep the surrounding chrome + Focus button.
+        if !root.focus-mode : Rectangle {
+            background: DesignTokens.ad-slot-bg;
+            height: 64px;
+
+            VerticalLayout {
+                Rectangle { background: DesignTokens.border; height: 1px; }
+
+                HorizontalLayout {
+                    padding-left: 0px;
+                    padding-right: 12px;
+                    padding-top: 0px;
+                    padding-bottom: 0px;
+                    spacing: 8px;
+                    alignment: stretch;
+
+                    // Vertical "AD" label — rotated 90deg ccw inside a fixed
+                    // 12-px-wide wrapper so layout does not shift.
+                    Rectangle {
+                        width: 12px;
+                        Text {
+                            text: "AD";
+                            color: DesignTokens.text-3;
+                            font-family: DesignTokens.font-mono-family;
+                            font-size: 9px;
+                            font-weight: 500;
+                            letter-spacing: 0.06px;
+                            rotation-angle: -90deg;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Stripe placeholder — flex-grow, 48px tall, dashed-look
+                    // border (degraded to solid per Slint 1.16.1 limitations,
+                    // see ADR 0007), centered mono caption.
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 48px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: DesignTokens.radius-sm;
+                        border-width: 1px;
+                        border-color: DesignTokens.border-strong;
+                        clip: true;
+
+                        Image {
+                            width: 100%;
+                            height: 100%;
+                            image-fit: fill;
+                            source: DesignTokens.dark-mode ? Icons.stripe-dark : Icons.stripe-light;
+                        }
+                        Text {
+                            text: "ad slot · WebView render area · 728×48";
+                            color: DesignTokens.text-3;
+                            font-family: DesignTokens.font-mono-family;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width;
+                            height: parent.height;
+                        }
+                    }
+
+                    // Focus ghost button — flips focus_mode on (which in
+                    // turn hides this whole region via the outer `if`).
+                    DButton {
+                        modifier: "sm";
+                        variant: "ghost";
+                        icon: Icons.eye;
+                        text: "Focus";
+                        y: (parent.height - self.height) / 2;
+                        clicked => {
+                            root.focus-mode = true;
+                            root.set-focus-mode(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+        // Z-order convention (UC 11, extended by UC 18):
+        //   1. VerticalLayout (with ad-slot row)
+        //   2. Toasts overlay
+        //   3. SettingsPanel (UC 09)
+        //   4. AboutModal (UC 18)        — sits above Settings so launching
+        //                                   from the Settings "About" row
+        //                                   does not get obscured.
+        //   5. BotCheckModal (UC 10)     — top-most; "user must act" overlay.
+        // Toast-on-modal is explicitly out of scope.
+        for entry[i] in root.toasts : Toast {
+            text: entry.text;
+            kind: entry.kind;
+            visible-now: entry.visible-now;
+            x: (parent.width - self.width) / 2;
+            // Stack newest at the bottom (above the ad slot), older above.
+            // 80 px from the window edge to clear the 64-px ad slot + footer
+            // breathing room; 40 px between successive toasts.
+            y: parent.height - 80px - (root.toasts.length - 1 - i) * 40px - self.height;
+            dismissed => { root.dismiss-toast(entry.id); }
+        }
+
+        // UC 09 settings panel — mounted unconditionally so its in-memory
+        // tab state survives open/close within a session. Overlays the
+        // queue/footer column above, with its own backdrop.
+        SettingsPanel {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            open: root.settings-open;
+            dest-dir-display: root.dest-dir-display;
+            format-pref: root.format-pref;
+            concurrency-cap: root.concurrency-cap;
+            cookies-options: root.cookies-options;
+            cookies-browser: root.cookies-browser;
+            cookies-empty: root.cookies-empty;
+            focus-mode: root.focus-mode;
+            ads-personalized: root.ads-personalized;
+            vendor-privacy-url: root.vendor-privacy-url;
+
+            close-clicked => { root.settings-open = false; }
+            pick-destination-dir => { root.pick-destination-dir(); }
+            set-format-pref(s) => { root.format-pref = s; root.set-format-pref(s); }
+            set-cookies-browser(s) => { root.cookies-browser = s; root.set-cookies-browser(s); }
+            set-concurrency-cap(v) => { root.concurrency-cap = v; root.cap = v; root.set-concurrency-cap(v); }
+            set-focus-mode(v) => { root.focus-mode = v; root.set-focus-mode(v); }
+            set-ads-personalized(v) => { root.ads-personalized = v; root.set-ads-personalized(v); }
+            open-vendor-privacy-policy => { root.open-vendor-privacy-policy(); }
+            about-clicked => { root.about-open = true; }
+        }
+
+        // UC 18 About modal — mounted unconditionally so the entrance
+        // animation can run on each open. Sits above SettingsPanel so
+        // launching from the Settings "About" row remains visible while
+        // the panel is still on screen; sits below BotCheckModal so a
+        // bot-check still wins when both happen to be open.
+        AboutModal {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            open: root.about-open;
+            app-version: root.app-version;
+            entries: root.about-entries;
+
+            close-clicked => { root.about-open = false; }
+            open-ffmpeg-source => { root.open-ffmpeg-source(); }
+        }
+
+        // UC 10 bot-check modal — mounted unconditionally so the entrance
+        // animation can run on each open. Stacks above SettingsPanel so an
+        // already-open settings panel does not capture clicks meant for the
+        // modal. The host derives `default-pick` and the per-browser
+        // detection booleans from `bot_check_default_pick` and the cached
+        // detected-browsers list.
+        BotCheckModal {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            open: root.bot-check-open;
+            affected-count: root.bot-check-affected-count;
+            default-pick: root.bot-check-default-pick;
+            has-brave: root.bot-check-has-brave;
+            has-chrome: root.bot-check-has-chrome;
+            has-chromium: root.bot-check-has-chromium;
+            has-edge: root.bot-check-has-edge;
+            has-firefox: root.bot-check-has-firefox;
+            has-opera: root.bot-check-has-opera;
+            has-safari: root.bot-check-has-safari;
+            has-vivaldi: root.bot-check-has-vivaldi;
+
+            pick(id, remember) => {
+                root.bot-check-last-pick = id;
+                root.bot-check-open = false;
+                root.bot-check-pick(id, remember);
+            }
+            cancel => {
+                root.bot-check-open = false;
+                root.bot-check-cancel();
+            }
+        }
+    }
+    }
+}

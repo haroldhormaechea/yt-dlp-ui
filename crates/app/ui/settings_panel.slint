@@ -1,0 +1,546 @@
+// Settings slide-in panel — UC 09.
+//
+// Source of truth: design/project/settings-panel.jsx. The panel is a layered
+// `Rectangle` (NOT a `PopupWindow`) with absolute positioning and an animated
+// `x`. The backdrop is a sibling `Rectangle` rendered when `open` is true.
+//
+// `MainWindow` mounts this component unconditionally; visual visibility is
+// driven by the `open` in-property so the slide animation can run on close
+// and the in-memory `current-tab` state survives open/close within a session.
+
+import { DesignTokens } from "design/tokens.slint";
+import { Button, Select, Toggle, Stepper, Tooltip, Icon } from "design/components.slint";
+import { Icons } from "icons.slint";
+
+// `Field` — label (12 px / 600), control, optional 11.5 px / `text-3` hint.
+// Mirrors the `Field` helper in `settings-panel.jsx:208-220`.
+component Field inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+
+    height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        spacing: 6px;
+
+        Text {
+            text: root.label;
+            color: DesignTokens.text;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        @children
+
+        if root.hint != "" : Text {
+            text: root.hint;
+            color: DesignTokens.text-3;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 11.5px;
+            wrap: word-wrap;
+        }
+    }
+}
+
+// `InfoBox` — accent-soft background, 1-px accent border, 6-px radius.
+// Used in the Cookies tab for the "stays on this machine" disclosure.
+component InfoBox inherits Rectangle {
+    in property <string> text;
+
+    background: DesignTokens.accent-soft;
+    border-color: DesignTokens.accent-border;
+    border-width: 1px;
+    border-radius: 6px;
+
+    HorizontalLayout {
+        padding: 11px;
+        spacing: 9px;
+        alignment: start;
+
+        Icon {
+            source: Icons.shield;
+            tint: DesignTokens.accent-text;
+            y: 1px;
+        }
+        Text {
+            text: root.text;
+            color: DesignTokens.accent-text;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 11.5px;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+export component SettingsPanel inherits Rectangle {
+    in property <bool> open;
+    in property <string> dest-dir-display;
+    in property <string> format-pref;
+    in property <int> concurrency-cap;
+    in property <[string]> cookies-options;
+    in property <string> cookies-browser;
+    in property <bool> cookies-empty;
+    in property <bool> focus-mode;
+    in property <bool> ads-personalized;
+    in property <string> vendor-privacy-url;
+
+    callback close-clicked();
+    callback pick-destination-dir();
+    callback set-format-pref(string);
+    callback set-cookies-browser(string);
+    callback set-concurrency-cap(int);
+    callback set-focus-mode(bool);
+    callback set-ads-personalized(bool);
+    callback open-vendor-privacy-policy();
+    // UC 18: opens the About modal. Mounted at the window level by
+    // `main_window.slint`; the panel just fires the callback.
+    callback about-clicked();
+
+    // In-memory tab state — preserved across open/close within a session,
+    // resets to "general" on app restart (panel re-instantiation).
+    property <string> current-tab: "general";
+
+    // Tracks the last-emitted format-pref display label so re-selecting the
+    // same option produces no callback. The four-token / three-label
+    // collapse: `BestVideo` and `BestHeuristic` both show as the first
+    // option, so re-selecting "Best video" while persisted as
+    // `BestHeuristic` would otherwise rewrite the row to `BestVideo` on
+    // first paint. Seeding this via the format-pref-bound `display-from-token`
+    // function avoids that.
+    property <string> last-emitted-display: root.display-from-token(root.format-pref);
+
+    // Make the panel itself span the parent area; the backdrop and slide
+    // rectangle are children with explicit positioning.
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // Backdrop — only rendered when open. Click closes the panel. The
+    // backdrop's TouchArea also stops events from reaching the queue or
+    // footer underneath.
+    if root.open : Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #0000002e; // rgba(0, 0, 0, 0.18)
+        opacity: 1;
+        animate opacity { duration: 160ms; easing: ease-in-out; }
+
+        TouchArea {
+            clicked => { root.close-clicked(); }
+        }
+    }
+
+    // Sliding panel. Width 380, full parent height. Slides in from the
+    // right via the `x` animation; mounted unconditionally so `current-tab`
+    // is preserved across open/close within a session.
+    panel := Rectangle {
+        width: 380px;
+        height: parent.height;
+        x: parent.width - (root.open ? 380px : 0px);
+        animate x {
+            duration: 200ms;
+            easing: cubic-bezier(0.2, 0.8, 0.3, 1);
+        }
+        background: DesignTokens.surface;
+
+        // Approximation of `var(--shadow-lg)` via decomposed tokens.
+        drop-shadow-color: DesignTokens.shadow-lg-color;
+        drop-shadow-blur: DesignTokens.shadow-lg-blur;
+        drop-shadow-offset-y: DesignTokens.shadow-lg-offset-y;
+
+        // 1-px left edge — Slint Rectangle has no per-side border, so we
+        // render it as a child rectangle.
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: 1px;
+            height: 100%;
+            background: DesignTokens.border;
+        }
+
+        VerticalLayout {
+            spacing: 0;
+
+            // Header.
+            Rectangle {
+                background: transparent;
+                border-color: DesignTokens.divider;
+                border-width: 0;
+                height: header.preferred-height + 14px;
+
+                header := VerticalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 14px;
+                    padding-bottom: 0;
+                    spacing: 12px;
+
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text {
+                            text: "Settings";
+                            color: DesignTokens.text;
+                            font-family: DesignTokens.font-ui-family;
+                            font-size: 14.5px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        Button {
+                            modifier: "icon-sm";
+                            variant: "ghost";
+                            icon: Icons.x;
+                            clicked => { root.close-clicked(); }
+                        }
+                    }
+
+                    // Tab strip.
+                    HorizontalLayout {
+                        spacing: 2px;
+                        alignment: start;
+
+                        Rectangle {
+                            width: tab-general.preferred-width + 20px;
+                            height: tab-general.preferred-height + 16px;
+                            background: transparent;
+                            tab-general := Text {
+                                text: "General";
+                                color: root.current-tab == "general" ? DesignTokens.text : DesignTokens.text-2;
+                                font-family: DesignTokens.font-ui-family;
+                                font-size: 12.5px;
+                                font-weight: root.current-tab == "general" ? 600 : 500;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            Rectangle {
+                                y: parent.height - 2px;
+                                width: 100%;
+                                height: 2px;
+                                background: root.current-tab == "general" ? DesignTokens.accent : transparent;
+                            }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.current-tab = "general"; }
+                            }
+                        }
+
+                        Rectangle {
+                            width: tab-cookies.preferred-width + 20px;
+                            height: tab-cookies.preferred-height + 16px;
+                            background: transparent;
+                            tab-cookies := Text {
+                                text: "Cookies";
+                                color: root.current-tab == "cookies" ? DesignTokens.text : DesignTokens.text-2;
+                                font-family: DesignTokens.font-ui-family;
+                                font-size: 12.5px;
+                                font-weight: root.current-tab == "cookies" ? 600 : 500;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            Rectangle {
+                                y: parent.height - 2px;
+                                width: 100%;
+                                height: 2px;
+                                background: root.current-tab == "cookies" ? DesignTokens.accent : transparent;
+                            }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.current-tab = "cookies"; }
+                            }
+                        }
+
+                        Rectangle {
+                            width: tab-privacy.preferred-width + 20px;
+                            height: tab-privacy.preferred-height + 16px;
+                            background: transparent;
+                            tab-privacy := Text {
+                                text: "Privacy & Ads";
+                                color: root.current-tab == "privacy-and-ads" ? DesignTokens.text : DesignTokens.text-2;
+                                font-family: DesignTokens.font-ui-family;
+                                font-size: 12.5px;
+                                font-weight: root.current-tab == "privacy-and-ads" ? 600 : 500;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                            Rectangle {
+                                y: parent.height - 2px;
+                                width: 100%;
+                                height: 2px;
+                                background: root.current-tab == "privacy-and-ads" ? DesignTokens.accent : transparent;
+                            }
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.current-tab = "privacy-and-ads"; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Header divider.
+            Rectangle { background: DesignTokens.divider; height: 1px; }
+
+            // Body — vertical-stretch fills remaining height.
+            Rectangle {
+                vertical-stretch: 1;
+                background: transparent;
+
+                VerticalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    spacing: 18px;
+
+                    // ─── General tab ────────────────────────────────────
+                    if root.current-tab == "general" : Field {
+                        label: "Format preference";
+                        hint: "Applies to subsequent downloads.";
+                        Select {
+                            model: ["Best video (bestvideo+bestaudio/best)",
+                                    "Best audio · MP3",
+                                    "Best audio · Opus"];
+                            current-value: root.display-from-token(root.format-pref);
+                            selected(s) => {
+                                if (s != root.last-emitted-display) {
+                                    root.last-emitted-display = s;
+                                    root.set-format-pref(root.token-from-display(s));
+                                }
+                            }
+                        }
+                    }
+
+                    if root.current-tab == "general" : Field {
+                        label: "Download destination";
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: stretch;
+
+                            // Read-only mono "input" — styled like Input but
+                            // non-editable.
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                height: 30px;
+                                border-radius: DesignTokens.radius;
+                                border-width: 1px;
+                                border-color: DesignTokens.border-strong;
+                                background: DesignTokens.surface;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    Text {
+                                        text: root.dest-dir-display;
+                                        color: DesignTokens.text-2;
+                                        font-family: DesignTokens.font-mono-family;
+                                        font-size: 11.5px;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                        wrap: no-wrap;
+                                        overflow: elide;
+                                    }
+                                }
+                            }
+                            Button {
+                                text: "Choose…";
+                                icon: Icons.folder;
+                                clicked => { root.pick-destination-dir(); }
+                            }
+                        }
+                    }
+
+                    if root.current-tab == "general" : Field {
+                        label: "Concurrency cap";
+                        hint: "Up to " + root.concurrency-cap + " parallel downloads.";
+                        Stepper {
+                            value: root.concurrency-cap;
+                            min: 1;
+                            max: 10;
+                            changed(v) => { root.set-concurrency-cap(v); }
+                        }
+                    }
+
+                    // ─── Cookies tab ────────────────────────────────────
+                    if root.current-tab == "cookies" : Field {
+                        label: "Cookies source";
+                        hint: root.cookies-empty
+                            ? "No supported browsers detected on this machine."
+                            : "Used only when YouTube asks for verification.";
+                        Select {
+                            model: root.cookies-options;
+                            current-value: root.cookies-browser;
+                            enabled: !root.cookies-empty;
+                            selected(s) => { root.set-cookies-browser(s); }
+                        }
+                    }
+
+                    if root.current-tab == "cookies" : InfoBox {
+                        text: "Cookies stay on this machine. yt-dlp-ui never uploads them anywhere.";
+                    }
+
+                    // ─── Privacy & Ads tab ──────────────────────────────
+                    if root.current-tab == "privacy-and-ads" : Field {
+                        label: "Focus mode";
+                        Toggle {
+                            on: root.focus-mode;
+                            label: root.focus-mode ? "Ad slot hidden" : "Ad slot visible";
+                            toggled(v) => { root.set-focus-mode(v); }
+                        }
+                    }
+
+                    if root.current-tab == "privacy-and-ads" : Field {
+                        label: "Ad personalization";
+                        Toggle {
+                            on: root.ads-personalized;
+                            label: root.ads-personalized ? "Personalized ads on" : "Generic ads only";
+                            toggled(v) => { root.set-ads-personalized(v); }
+                        }
+                    }
+
+                    if root.current-tab == "privacy-and-ads" : Rectangle {
+                        background: DesignTokens.surface-2;
+                        border-color: DesignTokens.border;
+                        border-width: 1px;
+                        border-radius: 6px;
+                        height: disclosure-layout.preferred-height + 24px;
+
+                        disclosure-layout := VerticalLayout {
+                            padding: 12px;
+                            spacing: 6px;
+
+                            Text {
+                                text: "How ads work here";
+                                color: DesignTokens.text;
+                                font-family: DesignTokens.font-ui-family;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+
+                            // Body copy split into prefix + link + suffix so the
+                            // link can be styled independently.
+                            Text {
+                                text: "yt-dlp-ui shows ads to keep development sustainable. The ad SDK collects device data (OS, locale, screen size) and behavioral signals to pick what to show.";
+                                color: DesignTokens.text-2;
+                                font-family: DesignTokens.font-ui-family;
+                                font-size: 11.5px;
+                                wrap: word-wrap;
+                            }
+
+                            // Link row — disabled state when no vendor URL is set.
+                            link-row := Rectangle {
+                                height: 18px;
+                                background: transparent;
+
+                                link-text := Text {
+                                    text: "Read the vendor's privacy policy.";
+                                    color: root.vendor-privacy-url == ""
+                                        ? DesignTokens.text-3
+                                        : DesignTokens.accent-text;
+                                    font-family: DesignTokens.font-ui-family;
+                                    font-size: 11.5px;
+                                    accessible-description: root.vendor-privacy-url == ""
+                                        ? "No ad vendor configured yet."
+                                        : "Open the ad vendor's privacy policy.";
+                                }
+
+                                link-ta := TouchArea {
+                                    enabled: root.vendor-privacy-url != "";
+                                    mouse-cursor: root.vendor-privacy-url == "" ? default : pointer;
+                                    clicked => { root.open-vendor-privacy-policy(); }
+                                }
+
+                                // Hover-only tooltip when disabled.
+                                Tooltip {
+                                    text: "No ad vendor configured yet.";
+                                    target-hovered: link-ta.has-hover && root.vendor-privacy-url == "";
+                                }
+                            }
+
+                            Text {
+                                text: "You can turn off personalization above, or hide the slot entirely with Focus mode.";
+                                color: DesignTokens.text-2;
+                                font-family: DesignTokens.font-ui-family;
+                                font-size: 11.5px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ─── About row (UC 18) ──────────────────────────────────
+            // Sits below the body so it always anchors to the bottom of
+            // the panel, regardless of which tab is active.
+            Rectangle { background: DesignTokens.divider; height: 1px; }
+
+            Rectangle {
+                background: transparent;
+                height: about-layout.preferred-height + 4px;
+
+                about-layout := HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    spacing: 10px;
+                    alignment: stretch;
+
+                    Image {
+                        source: Icons.info;
+                        colorize: DesignTokens.text-2;
+                        width: 16px;
+                        height: 16px;
+                        image-fit: contain;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    Text {
+                        text: "About yt-dlp-ui";
+                        color: DesignTokens.text;
+                        font-family: DesignTokens.font-ui-family;
+                        font-size: 12.5px;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                }
+
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.about-clicked(); }
+                }
+            }
+        }
+    }
+
+    // ─── Helpers ────────────────────────────────────────────────────────
+    // Maps the persisted token (`BestVideo` / `BestAudioMp3` / `BestAudioOpus`
+    // / `BestHeuristic`) to one of the three display labels. The four-token
+    // / three-label collapse: both `BestVideo` and `BestHeuristic` show as
+    // the first option.
+    function display-from-token(token: string) -> string {
+        if (token == "BestAudioMp3") {
+            return "Best audio · MP3";
+        }
+        if (token == "BestAudioOpus") {
+            return "Best audio · Opus";
+        }
+        return "Best video (bestvideo+bestaudio/best)";
+    }
+
+    // Inverse of `display-from-token`. Selecting "Best video" persists as
+    // `BestVideo`; legacy `BestHeuristic` rows show as "Best video" but
+    // never get rewritten because `last-emitted-display` predicate gates
+    // the callback.
+    function token-from-display(display: string) -> string {
+        if (display == "Best audio · MP3") {
+            return "BestAudioMp3";
+        }
+        if (display == "Best audio · Opus") {
+            return "BestAudioOpus";
+        }
+        return "BestVideo";
+    }
+}

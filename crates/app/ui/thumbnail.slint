@@ -1,0 +1,98 @@
+// Thumbnail block — gradient placeholder with diagonal stripe overlay,
+// source-icon glyph in the top-left corner, and a center play glyph. When
+// `thumbnail-loaded` flips true, the real-image `Image` crossfades over the
+// placeholder. Port of design/project/thumbnail.jsx; size is parameterizable
+// so the row delegate can pass 104×58 directly.
+
+import { DesignTokens } from "design/tokens.slint";
+import { Icons } from "icons.slint";
+import { SourceIcon } from "source_icon.slint";
+
+// Eight palette-pair colors. Indexed by `seed % 8` from the row's URL hash,
+// so the same URL always produces the same gradient. Values mirror
+// design/project/thumbnail.jsx::THUMB_PALETTES.
+component GradientCard inherits Rectangle {
+    in property <int> seed;
+    in property <length> w: 104px;
+    in property <length> h: 58px;
+
+    width: root.w;
+    height: root.h;
+    border-radius: 4px;
+    clip: true;
+    background: root.bg-from-seed();
+
+    function bg-from-seed() -> brush {
+        // Slint linear-gradient takes a sequence of stops; we approximate
+        // 135deg via `to-bottom-right` (Slint's only diagonal sugar).
+        if (root.seed == 0) { return @linear-gradient(135deg, #3b3b66 0%, #5e4480 100%); }
+        if (root.seed == 1) { return @linear-gradient(135deg, #1f4d52 0%, #2e7079 100%); }
+        if (root.seed == 2) { return @linear-gradient(135deg, #5b3a36 0%, #7d4a44 100%); }
+        if (root.seed == 3) { return @linear-gradient(135deg, #2d3a4f 0%, #3f536d 100%); }
+        if (root.seed == 4) { return @linear-gradient(135deg, #4d3a52 0%, #6b4670 100%); }
+        if (root.seed == 5) { return @linear-gradient(135deg, #3f4426 0%, #5e6433 100%); }
+        if (root.seed == 6) { return @linear-gradient(135deg, #503020 0%, #73493a 100%); }
+        return @linear-gradient(135deg, #1a3b3a 0%, #266b5d 100%);
+    }
+}
+
+export component Thumbnail inherits Rectangle {
+    in property <int> seed;
+    in property <string> source;
+    in property <image> real-image;
+    in property <bool> loaded;
+
+    width: 104px;
+    height: 58px;
+    clip: true;
+    border-radius: 4px;
+
+    // Layer 0 — gradient placeholder.
+    GradientCard {
+        seed: root.seed;
+        w: parent.width;
+        h: parent.height;
+    }
+
+    // Layer 1 — diagonal stripe overlay (theme-aware). Tiled image fill.
+    Image {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        source: DesignTokens.dark-mode ? Icons.shimmer-dark : Icons.shimmer-light;
+        image-fit: fill;
+        opacity: 0.55;
+    }
+
+    // Layer 2 — source glyph in top-left.
+    SourceIcon {
+        x: 5px;
+        y: 4px;
+        source-kind: root.source;
+    }
+
+    // Layer 3 — center play glyph (faint).
+    Image {
+        x: (parent.width - 18px) / 2;
+        y: (parent.height - 18px) / 2;
+        width: 18px;
+        height: 18px;
+        source: Icons.play;
+        colorize: white;
+        opacity: 0.32;
+    }
+
+    // Layer 4 — real image, crossfaded in when `loaded` flips true. The
+    // `image-fit: cover` mirrors the design's center-crop intent.
+    Image {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        source: root.real-image;
+        image-fit: cover;
+        opacity: root.loaded ? 1.0 : 0.0;
+        animate opacity { duration: 250ms; easing: ease-in-out; }
+    }
+}

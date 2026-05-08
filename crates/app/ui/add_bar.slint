@@ -1,0 +1,125 @@
+// Add bar — link-icon-prefixed input + primary "Add" button + theme-toggle
+// + gear (UC 09 reserved). Port of design/project/app.jsx ~lines 187-235.
+//
+// Note: we keep `TextEdit` (multi-line) instead of `Input` (single-line) for
+// paste UX — design says "Paste a video or playlist URL — multiple lines
+// supported". Single-line would silently truncate multi-line pastes.
+
+import { DesignTokens } from "design/tokens.slint";
+import { Button, Icon, Toggle } from "design/components.slint";
+import { Icons } from "icons.slint";
+import { TextEdit } from "std-widgets.slint";
+
+export component AddBar inherits Rectangle {
+    in-out property <string> value <=> ti.text;
+    // UC 19: per-URL "Audio only" toggle. Defaults to false (audio + video)
+    // per AC #1; AC #6 — resets to false whenever the URL field is cleared.
+    in-out property <bool> audio-only-on: false;
+
+    callback add-clicked();
+    callback toggle-theme-clicked();
+    callback gear-clicked();
+    // UC 19: informational — emitted when the toggle flips so a parent can
+    // observe state changes if needed. Internal state is held by `audio-only-on`.
+    callback audio-only-toggled(bool);
+
+    // UC 19 / AC #6: defense-in-depth reset. When the URL field is cleared
+    // (e.g. parent zeroes `value` after add-clicked), drop the toggle back
+    // to "Audio + video". Idempotent: setting the same value is a no-op.
+    changed value => {
+        if (self.value == "") {
+            self.audio-only-on = false;
+        }
+    }
+
+    background: DesignTokens.surface;
+    border-color: DesignTokens.border;
+    border-width: 0;
+    height: 54px;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 8px;
+        alignment: stretch;
+
+        // Input region — link icon + multi-line textedit.
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: DesignTokens.radius;
+            border-width: 1px;
+            border-color: DesignTokens.border-strong;
+            background: DesignTokens.surface;
+
+            Icon {
+                x: 10px;
+                y: (parent.height - self.height) / 2;
+                source: Icons.link;
+                size: "sm";
+                tint: DesignTokens.text-3;
+            }
+
+            ti := TextEdit {
+                x: 30px;
+                y: 0;
+                width: parent.width - 30px;
+                height: parent.height;
+                placeholder-text: "Paste a video or playlist URL — multiple lines supported";
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+        }
+
+        // UC 19: per-URL "Audio only" toggle. Sits between the URL field
+        // and the Add button so it reads as "this applies to what I'm about
+        // to add". Mono-caption label matches the rest of the captioned
+        // controls in the surface (~11 px, mono).
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            horizontal-stretch: 0;
+
+            Text {
+                text: "Audio only";
+                color: DesignTokens.text-3;
+                font-family: DesignTokens.font-mono-family;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+
+            Toggle {
+                on: root.audio-only-on;
+                toggled(v) => {
+                    root.audio-only-on = v;
+                    root.audio-only-toggled(v);
+                }
+            }
+        }
+
+        // Add button (primary, with plus icon).
+        Button {
+            text: "Add";
+            variant: "primary";
+            icon: Icons.plus;
+            clicked => { root.add-clicked(); }
+        }
+
+        // Theme toggle (icon button).
+        Button {
+            modifier: "icon";
+            icon: DesignTokens.dark-mode ? Icons.sun : Icons.moon;
+            clicked => { root.toggle-theme-clicked(); }
+        }
+
+        // Hamburger menu — toggles the settings panel. (Was Icons.gear, but
+        // gear.svg is visually almost identical to sun.svg / moon.svg, which
+        // made the settings button collide with the theme toggle next to it.)
+        Button {
+            modifier: "icon";
+            icon: Icons.menu;
+            clicked => { root.gear-clicked(); }
+        }
+    }
+}

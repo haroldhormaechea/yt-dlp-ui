@@ -1,0 +1,83 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/app",
+    "crates/ad-window",
+    "crates/yt-dlp-bridge",
+]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2024"
+rust-version = "1.95"
+license = "LicenseRef-PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/HaroldHormaechea/yt-dlp-ui"
+authors = ["Harold Hormaechea"]
+
+# -----------------------------------------------------------------------------
+# Workspace-wide lint policy.
+#
+# `unsafe_code = "forbid"` is deliberate: every direct dependency in this
+# workspace already encapsulates the unsafe code it needs. Application code
+# should never need its own unsafe blocks; forbidding at the workspace root
+# catches accidents at compile time.
+#
+# `clippy::pedantic` is enabled as a warning. Two pedantic lints that are
+# notoriously noisy without catching real bugs are explicitly allowed.
+# -----------------------------------------------------------------------------
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+# -----------------------------------------------------------------------------
+# Release-profile shrink settings (per Quality & Standards § Performance).
+#
+# - `lto = "fat"`            : full link-time optimization across all crates.
+# - `codegen-units = 1`      : single codegen unit for maximum cross-function
+#                              inlining and dead-code elimination. Slower to
+#                              compile, but smaller and faster output.
+# - `panic = "abort"`        : terminate on panic instead of unwinding. Saves
+#                              ~5% binary size and a small amount of runtime
+#                              overhead. Acceptable for a desktop app where
+#                              backtraces are not user-facing.
+# - `strip = true`           : strip debug symbols from the final artifact.
+#
+# These settings apply only to `--release` builds; debug builds keep the
+# default unwinding panic strategy and full debug info for development.
+# -----------------------------------------------------------------------------
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[workspace.dependencies]
+# Pinned versions per PROJECT_BRIEF.md frontmatter (`stack.versions`).
+slint = "1.16.1"
+wry = "0.55.0"
+tao = "0.35.0"
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+# PROJECT_BRIEF.md § Technologies pins reqwest 0.13.2 with features
+# `["rustls-tls", "json"]`. Drift caught at UC 08 implementation time:
+# reqwest 0.13.x renamed `rustls-tls` to `rustls`. The `default-features =
+# false` + rustls feature combination still avoids OpenSSL exactly as the
+# brief intends — only the feature flag name has changed.
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "json"] }
+tokio = "1.52.1"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+directories = "6"

@@ -1,0 +1,114 @@
+// Footer — `Start all` + `Cancel all` buttons + mono counts strip.
+// Port of design/project/app.jsx ~lines 294-329.
+
+import { DesignTokens } from "design/tokens.slint";
+import { Button, Tooltip } from "design/components.slint";
+import { Icons } from "icons.slint";
+
+export component Footer inherits Rectangle {
+    in property <int> active-count;
+    in property <int> queued-count;
+    in property <int> done-count;
+    in property <int> waiting-count;
+    in property <int> cap;
+    // UC 14: extra counts driving the broader Start-all enable predicate
+    // (`queued + cancelled + error > 0`) and the hover tooltip breakdown.
+    in property <int> cancelled-count;
+    in property <int> error-count;
+    // UC 14: mid-flight gate — `start-all` callback flips this true on the
+    // host side until the batch DB transaction + emit_row fan-out completes.
+    in property <bool> start-all-busy;
+    // UC 14: pre-rendered tooltip text owned by the host (`ui_bridge`) so
+    // the segment-omission rules live in one place (Rust unit-tested).
+    in property <string> tooltip-text;
+
+    callback start-all-clicked();
+    callback cancel-all-clicked();
+
+    background: DesignTokens.surface-2;
+    border-color: DesignTokens.border;
+    border-width: 0;
+    height: 50px;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 10px;
+        alignment: stretch;
+
+        // Left side — two buttons.
+        HorizontalLayout {
+            spacing: 8px;
+
+            // Start-all wrapper: hosts the Button and a sibling Tooltip
+            // bound to the Button's `hovered` out-property (UC 14).
+            Rectangle {
+                width: start-all-button.width;
+                height: start-all-button.height;
+                horizontal-stretch: 0;
+                vertical-stretch: 0;
+
+                start-all-button := Button {
+                    text: "Start all";
+                    icon: Icons.play;
+                    enabled: (root.queued-count + root.cancelled-count + root.error-count) > 0
+                            && !root.start-all-busy;
+                    clicked => { root.start-all-clicked(); }
+                }
+
+                Tooltip {
+                    text: root.tooltip-text;
+                    target-hovered: start-all-button.hovered;
+                }
+            }
+
+            Button {
+                text: "Cancel all";
+                variant: "danger";
+                icon: Icons.stop;
+                enabled: (root.queued-count + root.active-count + root.waiting-count) > 0;
+                clicked => { root.cancel-all-clicked(); }
+            }
+        }
+
+        // Spacer.
+        Rectangle { horizontal-stretch: 1; }
+
+        // Right side — mono counts strip.
+        HorizontalLayout {
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: root.active-count + " active";
+                color: DesignTokens.text-3;
+                font-family: DesignTokens.font-mono-family;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.queued-count + " queued";
+                color: DesignTokens.text-3;
+                font-family: DesignTokens.font-mono-family;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: root.done-count + " done";
+                color: DesignTokens.text-3;
+                font-family: DesignTokens.font-mono-family;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            Text {
+                text: "cap " + root.cap;
+                color: DesignTokens.text-3;
+                font-family: DesignTokens.font-mono-family;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

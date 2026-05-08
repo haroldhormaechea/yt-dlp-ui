@@ -1,0 +1,24 @@
+commands:
+  - cargo
+  - rustc
+  - rustup
+  - rustfmt
+  - node
+  - npm
+  - just
+  - bash
+  - shasum
+  - sha256sum
+  - lipo
+  - xattr
+  - tar
+  - unzip
+  - curl
+  - bats
+  - pwsh
+  - zip
+  - sed
+  - grep
+  - mkdir
+  - find
+  - which

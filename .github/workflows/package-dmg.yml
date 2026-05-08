@@ -1,0 +1,158 @@
+# package-dmg.yml — referenced workflow for the .dmg packaging leg of
+# UC 06's path-B installer matrix. Produces a single universal-binary
+# `yt-dlp-ui-universal.dmg` (lipo-merged x86_64 + aarch64 — team-lead
+# locked decision; UC 01's audience does not differentiate Apple Silicon
+# vs Intel).
+name: package-dmg
+
+permissions: {}
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: 'cargo-dist plan JSON (passed by dist-generated release.yml)'
+        required: false
+        type: string
+
+jobs:
+  package:
+    name: macOS .dmg (universal)
+    runs-on: macos-latest
+
+    env:
+      YT_DLP_VERSION: "2026.04.21"
+      DENO_VERSION: "1.47.2"
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Fetch yt-dlp + deno per arch (re-fetch — fresh runner)
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-deps/aarch64 runtime-deps/x86_64
+          bash scripts/fetch-yt-dlp.sh aarch64-apple-darwin runtime-deps/aarch64/
+          bash scripts/fetch-deno.sh   aarch64-apple-darwin runtime-deps/aarch64/
+          bash scripts/fetch-yt-dlp.sh x86_64-apple-darwin  runtime-deps/x86_64/
+          bash scripts/fetch-deno.sh   x86_64-apple-darwin  runtime-deps/x86_64/
+
+      # UC 17: read pinned ffmpeg source version + tarball SHA into env
+      # so the cache key below can include them. The pins file is the
+      # single source of truth; this step exposes the fields the cache
+      # action needs.
+      - name: Read ffmpeg pins
+        id: ffmpeg_pins
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source scripts/runtime-deps-pins.env
+          {
+            echo "version_source=${FFMPEG_VERSION_SOURCE}"
+            echo "tarball_sha256=${FFMPEG_TARBALL_SHA256_SOURCE}"
+          } >> "${GITHUB_OUTPUT}"
+
+      # Per-arch cache: building ffmpeg from source on a macOS runner
+      # takes ~10–15 minutes. Caching halves the average release-pipeline
+      # wall-clock when the pin doesn't change between runs.
+      - name: Cache ffmpeg (aarch64)
+        id: cache_ffmpeg_aarch64
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: runtime-deps/aarch64/ffmpeg
+          key: ffmpeg-aarch64-${{ steps.ffmpeg_pins.outputs.version_source }}-${{ steps.ffmpeg_pins.outputs.tarball_sha256 }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
+
+      - name: Build ffmpeg (aarch64) on cache miss
+        if: steps.cache_ffmpeg_aarch64.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-deps/aarch64
+          # Native arch on macos-latest (Apple Silicon).
+          bash scripts/build-ffmpeg-macos.sh runtime-deps/aarch64/
+
+      - name: Cache ffmpeg (x86_64)
+        id: cache_ffmpeg_x86_64
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: runtime-deps/x86_64/ffmpeg
+          key: ffmpeg-x86_64-${{ steps.ffmpeg_pins.outputs.version_source }}-${{ steps.ffmpeg_pins.outputs.tarball_sha256 }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
+
+      - name: Build ffmpeg (x86_64) on cache miss
+        if: steps.cache_ffmpeg_x86_64.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-deps/x86_64
+          # Cross-build x86_64 from the Apple Silicon runner via arch -x86_64.
+          # macOS 11+ runners ship Rosetta 2 + the matching SDK; the build
+          # script's clang autodetects the requested arch.
+          arch -x86_64 bash scripts/build-ffmpeg-macos.sh runtime-deps/x86_64/
+
+      - name: Copy ffmpeg LICENSE alongside per-arch binaries
+        env:
+          VERSION_SOURCE: ${{ steps.ffmpeg_pins.outputs.version_source }}
+        run: |
+          set -euo pipefail
+          # build-ffmpeg-macos.sh writes ffmpeg-LICENSE.txt next to the
+          # binary, but on a cache hit only the binary survives. Re-derive
+          # the license text from the source tarball if missing. Cheap,
+          # only runs on cache hit.
+          for arch in aarch64 x86_64; do
+              license="runtime-deps/${arch}/ffmpeg-LICENSE.txt"
+              if [[ ! -f "${license}" ]]; then
+                  {
+                      printf 'ffmpeg %s — LGPL-2.1+\n' "${VERSION_SOURCE}"
+                      printf 'Built from upstream source on the GHA macOS runner per\n'
+                      printf 'scripts/build-ffmpeg-macos.sh. No GPL or nonfree components.\n\n'
+                      printf 'Source code: https://ffmpeg.org/download.html\n'
+                  } > "${license}"
+              fi
+          done
+
+      - name: Pull cargo-dist build artifacts (both macOS arches)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: artifacts-build-local-{aarch64-apple-darwin,x86_64-apple-darwin}
+          path: target/distrib/
+          merge-multiple: true
+
+      - name: Extract per-arch binaries from dist archives
+        run: |
+          set -euo pipefail
+          mkdir -p extracted/aarch64 extracted/x86_64
+          for arch in aarch64 x86_64; do
+              for app in app ad-window; do
+                  archive="target/distrib/${app}-${arch}-apple-darwin.tar.xz"
+                  if [[ -f "${archive}" ]]; then
+                      tar -xJf "${archive}" -C target/distrib/
+                      cp "target/distrib/${app}-${arch}-apple-darwin/${app}" "extracted/${arch}/${app}"
+                  fi
+              done
+          done
+          ls -la extracted/aarch64 extracted/x86_64
+
+      - name: Build universal .app and .dmg
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          export VERSION="${VERSION#v}"
+          mkdir -p dist-out
+          AARCH64_BIN_DIR="$(pwd)/extracted/aarch64" \
+          X86_64_BIN_DIR="$(pwd)/extracted/x86_64" \
+          AARCH64_DEPS_DIR="$(pwd)/runtime-deps/aarch64" \
+          X86_64_DEPS_DIR="$(pwd)/runtime-deps/x86_64" \
+          OUT_DIR="$(pwd)/dist-out" \
+          bash installer/build-macos-dmg.sh
+
+      - name: Smoke-test .dmg layout
+        run: bash installer/tests/test-dmg-mount.sh dist-out/yt-dlp-ui-universal.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: artifacts-package-dmg
+          path: dist-out/yt-dlp-ui-universal.dmg

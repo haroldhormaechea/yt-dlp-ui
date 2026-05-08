@@ -1,0 +1,437 @@
+// Bot-check modal — UC 10.
+//
+// Source of truth: design/project/bot-check-modal.jsx. Replaces UC 05's
+// PopupWindow-based dialog with a centered overlay matching the Claude
+// Design composition. The shell mirrors UC 09's settings-panel layered-
+// Rectangle approach (NOT a PopupWindow): a backdrop sibling + a centered
+// panel, both rendered only when `open` is true.
+//
+// State reset on open uses the documented `states […]` pattern: entering
+// `open-state` re-declares `picked` (= default-pick supplied by the host)
+// and `remember = false`; once in that state the user's two-way-bound
+// edits override the declared values until the next open.
+//
+// All visual elements bind to DesignTokens so a `dark-mode` flip
+// re-themes the modal live.
+
+import { CheckBox } from "std-widgets.slint";
+import { DesignTokens } from "design/tokens.slint";
+import { Button as DButton } from "design/components.slint";
+import { Icons } from "icons.slint";
+
+// `BrowserRow` — one clickable row inside the picker panel. Renders the
+// 28×28 gradient glyph, the browser name, and a 16×16 radio indicator.
+component BrowserRow inherits Rectangle {
+    in property <string> name;
+    // yt-dlp arg form (e.g. "chrome") used as the row's identity for selection.
+    in property <string> id;
+    in property <string> selected-id;
+    in property <bool> first-row;
+    in property <brush> glyph-base;
+    in property <brush> glyph-lighter;
+    in property <brush> glyph-darker;
+    callback picked(string);
+
+    height: 46px;
+    background: root.id == root.selected-id ? DesignTokens.accent-soft : transparent;
+
+    // 1-px top border for every row except the first.
+    if !root.first-row : Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 1px;
+        background: DesignTokens.divider;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        spacing: 11px;
+        alignment: stretch;
+
+        // Glyph: a 28×28 circle with a layered radial-gradient look.
+        // Slint 1.16.1 has @radial-gradient but no inset shadow; we
+        // approximate "inset highlight + shadow" by stacking sibling
+        // Rectangles inside the glyph circle.
+        Rectangle {
+            width: 28px;
+            height: 28px;
+            border-radius: 14px;
+            background: @radial-gradient(circle, root.glyph-lighter 0%, root.glyph-base 70%, root.glyph-darker 100%);
+
+            // Inner highlight ring — 1-px white-ish overlay around the rim.
+            Rectangle {
+                width: parent.width;
+                height: parent.height;
+                border-radius: parent.border-radius;
+                background: transparent;
+                border-width: 1px;
+                border-color: #ffffff2e; // ~0.18 alpha white
+            }
+
+            // Center white dot to match the .jsx "9px white circle".
+            Rectangle {
+                width: 9px;
+                height: 9px;
+                border-radius: 4.5px;
+                background: #ffffffd9; // ~0.85 alpha white
+            }
+        }
+
+        Text {
+            text: root.name;
+            color: DesignTokens.text;
+            font-family: DesignTokens.font-ui-family;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+
+        // 16×16 radio indicator. Slint Rectangle border is uniform; we
+        // simulate the JSX's "5-px solid accent ring when selected, 1.5-px
+        // border-strong when not" by toggling border-width and border-color.
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            background: DesignTokens.surface;
+            border-width: root.id == root.selected-id ? 5px : 2px;
+            border-color: root.id == root.selected-id
+                ? DesignTokens.accent
+                : DesignTokens.border-strong;
+            y: (parent.height - self.height) / 2;
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.picked(root.id); }
+    }
+}
+
+export component BotCheckModal inherits Rectangle {
+    in property <bool> open;
+    in property <int> affected-count;
+    // Caller-supplied default selection (yt-dlp arg form) applied on each
+    // open via the states block. Empty string means "no browsers" but the
+    // host filters that case out (zero-browsers → toast, modal not shown).
+    in property <string> default-pick;
+    // Detection flags — host sets exactly the booleans matching the
+    // Browser variants returned by `browsers::detect_installed`. Visible
+    // rows render in canonical order: Brave > Chrome > Chromium > Edge >
+    // Firefox > Opera > Safari > Vivaldi.
+    in property <bool> has-brave;
+    in property <bool> has-chrome;
+    in property <bool> has-chromium;
+    in property <bool> has-edge;
+    in property <bool> has-firefox;
+    in property <bool> has-opera;
+    in property <bool> has-safari;
+    in property <bool> has-vivaldi;
+
+    // User selection state. `picked` is the yt-dlp arg form
+    // (e.g. "chrome"); `picked-name` is the display string used in the
+    // primary button label (e.g. "Use Chrome").
+    in-out property <string> picked;
+    in-out property <bool> remember;
+
+    callback pick(string, bool);
+    callback cancel();
+
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // Reset transient picker state on each open. Slint enforces these
+    // declarations only at the state-transition edge; afterwards the
+    // user's <=> bindings override them.
+    states [
+        closed when !root.open : {
+            picked: "";
+            remember: false;
+        }
+        open-state when root.open : {
+            picked: root.default-pick;
+            remember: false;
+        }
+    ]
+
+    // Display name of the currently picked browser, for the primary
+    // button label.
+    function display-name-of(id: string) -> string {
+        if (id == "brave")    { return "Brave"; }
+        if (id == "chrome")   { return "Chrome"; }
+        if (id == "chromium") { return "Chromium"; }
+        if (id == "edge")     { return "Edge"; }
+        if (id == "firefox")  { return "Firefox"; }
+        if (id == "opera")    { return "Opera"; }
+        if (id == "safari")   { return "Safari"; }
+        if (id == "vivaldi")  { return "Vivaldi"; }
+        return "";
+    }
+
+    // Backdrop — clicking it triggers Cancel. Sibling-rendered before
+    // the panel so the panel sits above.
+    if root.open : Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #0a0a0f6b; // rgba(10, 10, 15, 0.42)
+        opacity: 1;
+        animate opacity { duration: 180ms; easing: cubic-bezier(0.2, 0.8, 0.3, 1); }
+
+        TouchArea {
+            clicked => { root.cancel(); }
+        }
+    }
+
+    // Panel — 440 px wide, centered. The y-translation animation in the
+    // .jsx (`translate(-50%, -46%) → -50%`) is approximated by animating
+    // the y-offset on entrance.
+    if root.open : Rectangle {
+        width: 440px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        // Height is content-driven via the inner VerticalLayout; we
+        // expose a preferred-height that matches the layout.
+        height: layout.preferred-height;
+        background: DesignTokens.surface;
+        border-color: DesignTokens.border;
+        border-width: 1px;
+        border-radius: 10px;
+        drop-shadow-color: DesignTokens.shadow-lg-color;
+        drop-shadow-blur: DesignTokens.shadow-lg-blur;
+        drop-shadow-offset-y: DesignTokens.shadow-lg-offset-y;
+
+        layout := VerticalLayout {
+            spacing: 0;
+
+            // ─── Header ─────────────────────────────────────────────
+            Rectangle {
+                background: transparent;
+                height: header-layout.preferred-height;
+
+                header-layout := HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 14px;
+                    spacing: 12px;
+                    alignment: start;
+
+                    // Warning-soft 32×32 shield circle.
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 16px;
+                        background: DesignTokens.warning-soft;
+                        y: 0;
+
+                        Image {
+                            source: Icons.shield;
+                            colorize: DesignTokens.warning-text;
+                            width: 16px;
+                            height: 16px;
+                            image-fit: contain;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Title + sub-paragraph stack.
+                    VerticalLayout {
+                        spacing: 4px;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: "YouTube needs cookies to verify you're not a bot.";
+                            color: DesignTokens.text;
+                            font-family: DesignTokens.font-ui-family;
+                            font-size: 14.5px;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+
+                        // Sub-paragraph. Slint Text has no inline-bold-span
+                        // primitive, so the affected-count clause is rendered
+                        // as a separate inline-styled child below the main
+                        // copy when count > 1. Acceptable degradation.
+                        Text {
+                            text: "Pick a browser you're signed into YouTube with. yt-dlp-ui will read its cookies (locally, just once) and retry the download.";
+                            color: DesignTokens.text-2;
+                            font-family: DesignTokens.font-ui-family;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+
+                        if root.affected-count > 1 : Text {
+                            // Single-line styled clause; the "<N> queued items"
+                            // is colored as `text` for emphasis (closest match
+                            // to the JSX `<strong>` span without inline
+                            // markup support).
+                            text: "This applies to " + root.affected-count + " queued items.";
+                            color: DesignTokens.text;
+                            font-family: DesignTokens.font-ui-family;
+                            font-size: 12px;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            // ─── Browser picker box ─────────────────────────────────
+            Rectangle {
+                background: transparent;
+                height: picker-layout.preferred-height + 0px;
+
+                picker-layout := HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 0;
+                    padding-bottom: 0;
+
+                    // Outer rounded box — surface-2 background, 1-px border,
+                    // 8-px radius. Children are the per-browser rows.
+                    Rectangle {
+                        background: DesignTokens.surface-2;
+                        border-color: DesignTokens.border;
+                        border-width: 1px;
+                        border-radius: 8px;
+                        clip: true;
+                        height: picker-rows.preferred-height;
+                        horizontal-stretch: 1;
+
+                        picker-rows := VerticalLayout {
+                            spacing: 0;
+
+                            if root.has-brave : BrowserRow {
+                                name: "Brave";
+                                id: "brave";
+                                selected-id: root.picked;
+                                first-row: true;
+                                glyph-base: #fb542b;
+                                glyph-lighter: #fc7d5c;
+                                glyph-darker: #d33b15;
+                                picked(id) => { root.picked = id; }
+                            }
+                            if root.has-chrome : BrowserRow {
+                                name: "Chrome";
+                                id: "chrome";
+                                selected-id: root.picked;
+                                first-row: !root.has-brave;
+                                glyph-base: #4285f4;
+                                glyph-lighter: #75a8f7;
+                                glyph-darker: #1a64d8;
+                                picked(id) => { root.picked = id; }
+                            }
+                            if root.has-chromium : BrowserRow {
+                                name: "Chromium";
+                                id: "chromium";
+                                selected-id: root.picked;
+                                first-row: !root.has-brave && !root.has-chrome;
+                                glyph-base: #4587f4;
+                                glyph-lighter: #78aaf7;
+                                glyph-darker: #1d66d8;
+                                picked(id) => { root.picked = id; }
+                            }
+                            if root.has-edge : BrowserRow {
+                                name: "Edge";
+                                id: "edge";
+                                selected-id: root.picked;
+                                first-row: !root.has-brave && !root.has-chrome && !root.has-chromium;
+                                glyph-base: #0078d4;
+                                glyph-lighter: #2ea0ed;
+                                glyph-darker: #00578f;
+                                picked(id) => { root.picked = id; }
+                            }
+                            if root.has-firefox : BrowserRow {
+                                name: "Firefox";
+                                id: "firefox";
+                                selected-id: root.picked;
+                                first-row: !root.has-brave && !root.has-chrome && !root.has-chromium && !root.has-edge;
+                                glyph-base: #ff7139;
+                                glyph-lighter: #ff9669;
+                                glyph-darker: #db4d18;
+                                picked(id) => { root.picked = id; }
+                            }
+                            if root.has-opera : BrowserRow {
+                                name: "Opera";
+                                id: "opera";
+                                selected-id: root.picked;
+                                first-row: !root.has-brave && !root.has-chrome && !root.has-chromium && !root.has-edge && !root.has-firefox;
+                                glyph-base: #ff1b2d;
+                                glyph-lighter: #ff586a;
+                                glyph-darker: #d10010;
+                                picked(id) => { root.picked = id; }
+                            }
+                            if root.has-safari : BrowserRow {
+                                name: "Safari";
+                                id: "safari";
+                                selected-id: root.picked;
+                                first-row: !root.has-brave && !root.has-chrome && !root.has-chromium && !root.has-edge && !root.has-firefox && !root.has-opera;
+                                glyph-base: #1f8df8;
+                                glyph-lighter: #57acfa;
+                                glyph-darker: #0066cf;
+                                picked(id) => { root.picked = id; }
+                            }
+                            if root.has-vivaldi : BrowserRow {
+                                name: "Vivaldi";
+                                id: "vivaldi";
+                                selected-id: root.picked;
+                                first-row: !root.has-brave && !root.has-chrome && !root.has-chromium && !root.has-edge && !root.has-firefox && !root.has-opera && !root.has-safari;
+                                glyph-base: #ef3939;
+                                glyph-lighter: #f4706e;
+                                glyph-darker: #ca1414;
+                                picked(id) => { root.picked = id; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ─── Footer ─────────────────────────────────────────────
+            Rectangle {
+                background: transparent;
+                height: footer-layout.preferred-height;
+
+                footer-layout := HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 14px;
+                    padding-bottom: 14px;
+                    spacing: 8px;
+                    alignment: stretch;
+
+                    CheckBox {
+                        text: "Remember this choice";
+                        checked <=> root.remember;
+                    }
+
+                    // Spacer.
+                    Rectangle {
+                        background: transparent;
+                        horizontal-stretch: 1;
+                    }
+
+                    DButton {
+                        text: "Cancel";
+                        clicked => { root.cancel(); }
+                    }
+
+                    DButton {
+                        text: "Use " + root.display-name-of(root.picked);
+                        variant: "primary";
+                        enabled: root.picked != "";
+                        clicked => { root.pick(root.picked, root.remember); }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -27,7 +27,7 @@ build:
     lint: "cargo clippy --workspace --all-targets -- -D warnings"
     format: "cargo fmt --all"
 paths:
-  production: ["crates/*/src/**"]
+  production: ["crates/*/src/**", "crates/app/ui/**"]
   test: ["crates/*/tests/**", "crates/*/src/**/*_test.rs"]
   api_boundary: null
 test:
@@ -195,7 +195,7 @@ Process count under typical load: `1 (app) + 1 (ad-window, if visible) + min(que
 
 ### Trust boundaries
 
-- **Source-level read-only zone:** the upstream Python tree and its tooling — `yt_dlp/`, `bundle/`, `devscripts/`, `test/`, `pyproject.toml`, `uv.lock`, `Makefile`, `Changelog.md`, `CONTRIBUTORS`, `Maintainers.md`, `supportedsites.md`, `THIRD_PARTY_LICENSES.txt`, the existing `LICENSE`, the existing `README.md`, `yt-dlp.cmd`, `yt-dlp.sh`, `public.key`, `.pre-commit-config.yaml`, `.pre-commit-hatch.yaml`, the existing `.editorconfig`, the existing `.gitattributes`, and the existing `.github/`. The dev-team's `developer` and `qa` agents must not write into any of these. The `paths.production = ["crates/*/src/**"]` glob enforces this scope.
+- **Bundled-binary supply chain:** the `yt-dlp`, `deno`, and `ffmpeg` binaries are fetched from upstream releases at build time and verified per the protocols in `scripts/runtime-deps-pins.env` and `scripts/fetch-*.{sh,ps1}` / `scripts/build-ffmpeg-macos.sh`. THREATS.md § T1 + § T13 documents the trust posture.
 - **Runtime invocation surface:** only the bundled `yt-dlp` standalone binary is executed. The upstream Python tree is never imported or interpreted at runtime.
 - **`ad-window` privilege envelope:**
   - May: read its own stdin (the IPC line protocol); write its own stdout/stderr (events + `tracing` logs); make outbound HTTPS calls (the WebView fetches ad creative); read/write its own per-process WebView cache directory (a temp dir created by the helper and cleaned up on exit).
@@ -411,7 +411,7 @@ A desktop app does not have "hosting" in the SaaS sense. This section covers the
   - **`THREATS.md` consequence:** unsigned binaries cannot be cryptographically tied to this project's identity. Users downloading from a non-official source could receive a tampered binary. **Mitigation:** distribute exclusively from GitHub Releases on the canonical repo URL, and publish the SHA256 hash for each release alongside the binaries.
 - **yt-dlp binary supply chain:**
   - Fetch upstream's official prebuilt standalone binary from the upstream GitHub release matching the pinned `YT_DLP_VERSION` (per-OS asset: `yt-dlp` for Linux, `yt-dlp_macos` for macOS, `yt-dlp.exe` for Windows).
-  - **GPG-verify** the binary's detached signature using the existing `public.key` file at the repo root (upstream's public key, already present and untouched).
+  - **GPG-verify** the binary's detached signature using the existing `scripts/keys/yt-dlp.asc` file (upstream's public key, already present and untouched).
   - **SHA256 hash check** against upstream's published `SHA2-256SUMS` for the same release.
   - Pin via `YT_DLP_VERSION` env var in the workflow; bumping is a manual PR for now (auto-bump deferred to production maturity).
   - Copy the verified binary into the build artifact tree at the per-OS bundled location (per Architecture § Bundled-binary path).
@@ -459,6 +459,8 @@ A desktop app does not have "hosting" in the SaaS sense. This section covers the
 ## Use Cases
 
 Use cases are captured individually under `use-cases/` and indexed in `USE_CASES.md`. The dev-team orchestrator picks one up per `develop` run and updates the ledger's `Status` / `Updated` columns; new use cases are added via the `define-use-case` skill from the root session.
+
+> **UC 20 (2026-05-08)** invalidated the obsolete "upstream-tree read-only zone" enumeration that previously lived in this section; the standalone repo no longer ships any upstream Python files, so the rule does not apply.
 
 ## Scaffolding Plan
 
@@ -510,13 +512,6 @@ The existing `.gitignore` at the repo root is upstream's (Python-tooling oriente
 - `examples/placeholder-ad.png` (only if the user wants it git-ignored — will ask)
 
 This is the only edit to a pre-existing repo-root file. It is an append, not an overwrite, and adds no Python-tree entries.
-
-### Files / directories I will DELIBERATELY NOT TOUCH
-
-The entire upstream yt-dlp tree is read-only at the source level:
-`yt_dlp/`, `bundle/`, `devscripts/`, `test/`, `pyproject.toml`, `uv.lock`, `Makefile`, `Changelog.md`, `CONTRIBUTORS`, `CONTRIBUTING.md`, `Maintainers.md`, `supportedsites.md`, `THIRD_PARTY_LICENSES.txt`, `LICENSE`, `README.md`, `yt-dlp.cmd`, `yt-dlp.sh`, `public.key`, `.pre-commit-config.yaml`, `.pre-commit-hatch.yaml`, `.editorconfig`, `.gitattributes`, `.github/`.
-
-I will NOT create `README.UI.md` during scaffolding either. The `write-readme` skill is offered separately at the end of scaffolding, with an explicit warning that the existing `README.md` is upstream's 178 KB README and must NOT be overwritten.
 
 ### Shell commands
 

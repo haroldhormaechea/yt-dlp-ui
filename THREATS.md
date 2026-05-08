@@ -400,6 +400,29 @@ Mitigations applied:
   for cases where xattrs are re-applied (e.g. an end-user-modified
   install or a future signing transition).
 
+### T14. Repository licensing transition (UC 20)
+
+The repo-root `LICENSE` file is now **PolyForm Noncommercial 1.0.0** —
+the project's source-available, non-commercial license that applies to
+all UI and installer code in this repository. Prior to UC 20 (the fork
+extraction migration) the repo-root `LICENSE` was upstream yt-dlp's
+**Unlicense**; it has been replaced.
+
+The bundled `yt-dlp` binary continues to ship under upstream's
+**Unlicense** terms; the canonical Unlicense text is shipped as
+`installer/yt-dlp-LICENSE.txt` to the per-OS bundled-binary install path
+(matching UC 17's `ffmpeg-LICENSE.txt` precedent for the bundled
+`ffmpeg` binary, which remains LGPL-2.1+).
+
+**Consequence:** the project's GitHub landing page now displays
+PolyForm Noncommercial 1.0.0 instead of the Unlicense. This is a
+user-visible licensing change documented in CONTRIBUTING.md and
+README.md.
+
+**Mitigations:** none required — the licensing is explicit in repo
+files, in the artifact-bundled `yt-dlp-LICENSE.txt` shipped to end
+users, and in `crates/app/src/about.rs`'s About-modal license listing.
+
 ## What this document does NOT cover
 
 - The user's host OS being compromised (rootkit, malware, hostile admin).

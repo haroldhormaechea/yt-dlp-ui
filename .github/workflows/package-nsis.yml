@@ -40,8 +40,15 @@ jobs:
       - name: Install NSIS
         run: choco install nsis --no-progress --confirm
 
-      - name: Install GnuPG
-        run: choco install gnupg --no-progress --confirm
+      # GnuPG is provided by Git for Windows on `windows-latest`
+      # (`C:\Program Files\Git\usr\bin\gpg.exe`, already on PATH). Avoid the
+      # choco install — observed 45-minute timeouts on a gnupg-w32 file-move
+      # race during chocolatey's post-install step.
+      - name: Smoke-check gpg availability (Git for Windows)
+        shell: pwsh
+        run: |
+          gpg --version
+          if ($LASTEXITCODE -ne 0) { throw "gpg not on PATH on windows-latest; expected Git for Windows to provide it" }
 
       - name: Download WebView2 Evergreen Bootstrapper
         shell: pwsh

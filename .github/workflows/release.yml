@@ -135,7 +135,7 @@ jobs:
           bash scripts/fetch-deno.sh   "${{ matrix.targets[0] }}" runtime-deps/
         shell: "bash"
         env:
-          "DENO_VERSION": "1.47.2"
+          "DENO_VERSION": "2.7.14"
           "YT_DLP_VERSION": "2026.03.17"
       - name: "Fetch ffmpeg (Linux)"
         if: "runner.os == 'Linux'"
@@ -149,9 +149,11 @@ jobs:
           mkdir -p runtime-deps
           bash scripts/build-ffmpeg-macos.sh runtime-deps/
         shell: "bash"
-      - name: "Install GnuPG (Windows)"
+      - name: "Smoke-check gpg availability (Windows)"
         if: "runner.os == 'Windows'"
-        run: "choco install gnupg --no-progress --confirm"
+        run: |
+          gpg --version
+          if ($LASTEXITCODE -ne 0) { throw "gpg not on PATH on windows-latest; expected Git for Windows to provide it" }
         shell: "pwsh"
       - name: "Fetch yt-dlp + deno (Windows)"
         if: "runner.os == 'Windows'"
@@ -161,7 +163,7 @@ jobs:
           pwsh scripts/fetch-deno.ps1   -TargetTriple "${{ matrix.targets[0] }}" -OutputDir runtime-deps/
         shell: "pwsh"
         env:
-          "DENO_VERSION": "1.47.2"
+          "DENO_VERSION": "2.7.14"
           "YT_DLP_VERSION": "2026.03.17"
       - name: "Fetch ffmpeg (Windows)"
         if: "runner.os == 'Windows'"

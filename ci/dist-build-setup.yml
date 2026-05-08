@@ -40,10 +40,16 @@
     mkdir -p runtime-deps
     bash scripts/build-ffmpeg-macos.sh runtime-deps/
 
-- name: Install GnuPG (Windows)
+# GnuPG is provided by Git for Windows on `windows-latest`
+# (`C:\Program Files\Git\usr\bin\gpg.exe`, already on PATH). Smoke-check
+# availability before the fetch step uses it; failing here is loud and fast,
+# unlike the previous `choco install gnupg` which could hang for 45 minutes.
+- name: Smoke-check gpg availability (Windows)
   if: runner.os == 'Windows'
   shell: pwsh
-  run: choco install gnupg --no-progress --confirm
+  run: |
+    gpg --version
+    if ($LASTEXITCODE -ne 0) { throw "gpg not on PATH on windows-latest; expected Git for Windows to provide it" }
 
 - name: Fetch yt-dlp + deno (Windows)
   if: runner.os == 'Windows'

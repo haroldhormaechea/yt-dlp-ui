@@ -137,6 +137,18 @@ jobs:
         env:
           "DENO_VERSION": "1.47.2"
           "YT_DLP_VERSION": "2026.04.21"
+      - name: "Fetch ffmpeg (Linux)"
+        if: "runner.os == 'Linux'"
+        run: |
+          mkdir -p runtime-deps
+          bash scripts/fetch-ffmpeg.sh "${{ matrix.targets[0] }}" runtime-deps/
+        shell: "bash"
+      - name: "Build ffmpeg (macOS, LGPL-only, from source)"
+        if: "runner.os == 'macOS'"
+        run: |
+          mkdir -p runtime-deps
+          bash scripts/build-ffmpeg-macos.sh runtime-deps/
+        shell: "bash"
       - name: "Install GnuPG (Windows)"
         if: "runner.os == 'Windows'"
         run: "choco install gnupg --no-progress --confirm"
@@ -151,6 +163,12 @@ jobs:
         env:
           "DENO_VERSION": "1.47.2"
           "YT_DLP_VERSION": "2026.04.21"
+      - name: "Fetch ffmpeg (Windows)"
+        if: "runner.os == 'Windows'"
+        run: |
+          New-Item -ItemType Directory -Force -Path runtime-deps | Out-Null
+          pwsh scripts/fetch-ffmpeg.ps1 -TargetTriple "${{ matrix.targets[0] }}" -OutputDir runtime-deps/
+        shell: "pwsh"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

@@ -14,7 +14,7 @@
   if: runner.os == 'Linux' || runner.os == 'macOS'
   shell: bash
   env:
-    YT_DLP_VERSION: "2026.04.21"
+    YT_DLP_VERSION: "2026.03.17"
     DENO_VERSION: "1.47.2"
   run: |
     mkdir -p runtime-deps
@@ -49,7 +49,7 @@
   if: runner.os == 'Windows'
   shell: pwsh
   env:
-    YT_DLP_VERSION: "2026.04.21"
+    YT_DLP_VERSION: "2026.03.17"
     DENO_VERSION: "1.47.2"
   run: |
     New-Item -ItemType Directory -Force -Path runtime-deps | Out-Null

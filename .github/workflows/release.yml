@@ -136,7 +136,7 @@ jobs:
         shell: "bash"
         env:
           "DENO_VERSION": "1.47.2"
-          "YT_DLP_VERSION": "2026.04.21"
+          "YT_DLP_VERSION": "2026.03.17"
       - name: "Fetch ffmpeg (Linux)"
         if: "runner.os == 'Linux'"
         run: |
@@ -162,7 +162,7 @@ jobs:
         shell: "pwsh"
         env:
           "DENO_VERSION": "1.47.2"
-          "YT_DLP_VERSION": "2026.04.21"
+          "YT_DLP_VERSION": "2026.03.17"
       - name: "Fetch ffmpeg (Windows)"
         if: "runner.os == 'Windows'"
         run: |

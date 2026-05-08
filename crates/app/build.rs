@@ -376,9 +376,7 @@ fn bake_runtime_pins() {
         return;
     };
 
-    let pins_path = workspace_root
-        .join("scripts")
-        .join("runtime-deps-pins.env");
+    let pins_path = workspace_root.join("scripts").join("runtime-deps-pins.env");
 
     println!("cargo:rerun-if-changed={}", pins_path.display());
 

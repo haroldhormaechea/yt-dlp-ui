@@ -405,7 +405,10 @@ async fn add_url_single_video_inserts_one_row() {
 async fn add_url_duplicate_returns_duplicate_url_error() {
     let env = setup(FakeBehavior::default(), 1);
     let url = "https://example.com/dup".to_string();
-    env.manager.add_url(url.clone(), None).await.expect("first add");
+    env.manager
+        .add_url(url.clone(), None)
+        .await
+        .expect("first add");
 
     let err = env
         .manager
@@ -794,7 +797,11 @@ async fn add_url_playlist_threads_audio_only_override_to_every_entry() {
         .db
         .with_conn(crate::db::queue::list_all)
         .expect("list_all");
-    let entry_urls = ["https://example.com/pl-a", "https://example.com/pl-b", "https://example.com/pl-c"];
+    let entry_urls = [
+        "https://example.com/pl-a",
+        "https://example.com/pl-b",
+        "https://example.com/pl-c",
+    ];
     for url in entry_urls {
         let row = items
             .iter()
@@ -826,10 +833,7 @@ async fn add_url_with_none_override_uses_settings_default() {
         .unwrap();
 
     env.manager
-        .add_url(
-            "https://example.com/none-override".to_string(),
-            None,
-        )
+        .add_url("https://example.com/none-override".to_string(), None)
         .await
         .expect("add_url");
 
@@ -1974,7 +1978,10 @@ async fn cancel_one_during_auth_required_terminates_at_cancelled() {
     );
 
     env.manager
-        .add_url("https://www.youtube.com/watch?v=cancel-during-auth".to_string(), None)
+        .add_url(
+            "https://www.youtube.com/watch?v=cancel-during-auth".to_string(),
+            None,
+        )
         .await
         .expect("add");
 
@@ -2202,7 +2209,10 @@ async fn auth_required_followed_by_cancel_lands_at_cancelled_without_error_msg()
     );
 
     env.manager
-        .add_url("https://www.youtube.com/watch?v=auth-then-cancel".to_string(), None)
+        .add_url(
+            "https://www.youtube.com/watch?v=auth-then-cancel".to_string(),
+            None,
+        )
         .await
         .expect("add");
     let id = env

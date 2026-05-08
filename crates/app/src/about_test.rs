@@ -9,11 +9,11 @@
 //! of `about.rs` (mirroring `bot_check.rs:26-28` and `paths.rs:13-15`).
 //! Without that line, Cargo will not pick this file up.
 
-use super::{APP_VERSION, entries, ffmpeg_display_version};
 #[cfg(not(target_os = "macos"))]
 use super::FFMPEG_RELEASE_TAG;
 #[cfg(target_os = "macos")]
 use super::FFMPEG_VERSION_SOURCE;
+use super::{APP_VERSION, entries, ffmpeg_display_version};
 use std::collections::HashSet;
 
 /// AC#1 / AC#2 — version surfacing. The workspace Cargo.toml is pinned to

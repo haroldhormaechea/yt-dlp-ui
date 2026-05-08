@@ -108,19 +108,33 @@ fn seeded_row_survives_smoke_run() {
         .env("PATH", &path_var)
         .env("RUST_LOG", "info");
     // Smoke spawns the app binary which calls `paths::default_download_dir()`
-    // at startup. UserDirs on Linux returns None when XDG_DOWNLOAD_DIR is
-    // unset AND ~/Downloads doesn't exist (the GHA Ubuntu runner shape).
-    // Stage a Downloads subdir under tmp and point both HOME and
-    // XDG_DOWNLOAD_DIR at it. macOS keeps the existing HOME=data_dir
-    // (UserDirs there returns ~/Downloads regardless of existence).
+    // at startup. The `dirs` crate (used by `directories::UserDirs`) reads
+    // XDG_DOWNLOAD_DIR from `$XDG_CONFIG_HOME/user-dirs.dirs` (or
+    // `$HOME/.config/user-dirs.dirs`), NOT from the env var of the same
+    // name. Fresh GHA Ubuntu runners have no such config file. We stage a
+    // tmp HOME with a synthetic user-dirs.dirs file pointing at a Downloads
+    // subdir we create under it.
+    //
+    // macOS uses CFNetwork to resolve user dirs and returns ~/Downloads
+    // regardless of physical existence, so HOME=data_dir is sufficient
+    // there. Windows reads %USERPROFILE% similarly.
     if cfg!(target_os = "macos") {
         cmd.env("HOME", &data_dir);
     } else {
         let downloads = tmp.path().join("Downloads");
         fs::create_dir_all(&downloads).expect("mkdir Downloads");
+        let xdg_config = tmp.path().join(".config");
+        fs::create_dir_all(&xdg_config).expect("mkdir .config");
+        let user_dirs_file = xdg_config.join("user-dirs.dirs");
+        fs::write(
+            &user_dirs_file,
+            format!("XDG_DOWNLOAD_DIR=\"{}\"\n", downloads.display()),
+        )
+        .expect("write user-dirs.dirs");
         cmd.env("XDG_DATA_HOME", &data_dir);
         cmd.env("HOME", tmp.path());
         cmd.env("USERPROFILE", tmp.path());
+        cmd.env("XDG_CONFIG_HOME", &xdg_config);
         cmd.env("XDG_DOWNLOAD_DIR", &downloads);
     }
 
@@ -239,19 +253,33 @@ fn dest_dir_setting_persists_across_smoke_run() {
         .env("PATH", &path_var)
         .env("RUST_LOG", "info");
     // Smoke spawns the app binary which calls `paths::default_download_dir()`
-    // at startup. UserDirs on Linux returns None when XDG_DOWNLOAD_DIR is
-    // unset AND ~/Downloads doesn't exist (the GHA Ubuntu runner shape).
-    // Stage a Downloads subdir under tmp and point both HOME and
-    // XDG_DOWNLOAD_DIR at it. macOS keeps the existing HOME=data_dir
-    // (UserDirs there returns ~/Downloads regardless of existence).
+    // at startup. The `dirs` crate (used by `directories::UserDirs`) reads
+    // XDG_DOWNLOAD_DIR from `$XDG_CONFIG_HOME/user-dirs.dirs` (or
+    // `$HOME/.config/user-dirs.dirs`), NOT from the env var of the same
+    // name. Fresh GHA Ubuntu runners have no such config file. We stage a
+    // tmp HOME with a synthetic user-dirs.dirs file pointing at a Downloads
+    // subdir we create under it.
+    //
+    // macOS uses CFNetwork to resolve user dirs and returns ~/Downloads
+    // regardless of physical existence, so HOME=data_dir is sufficient
+    // there. Windows reads %USERPROFILE% similarly.
     if cfg!(target_os = "macos") {
         cmd.env("HOME", &data_dir);
     } else {
         let downloads = tmp.path().join("Downloads");
         fs::create_dir_all(&downloads).expect("mkdir Downloads");
+        let xdg_config = tmp.path().join(".config");
+        fs::create_dir_all(&xdg_config).expect("mkdir .config");
+        let user_dirs_file = xdg_config.join("user-dirs.dirs");
+        fs::write(
+            &user_dirs_file,
+            format!("XDG_DOWNLOAD_DIR=\"{}\"\n", downloads.display()),
+        )
+        .expect("write user-dirs.dirs");
         cmd.env("XDG_DATA_HOME", &data_dir);
         cmd.env("HOME", tmp.path());
         cmd.env("USERPROFILE", tmp.path());
+        cmd.env("XDG_CONFIG_HOME", &xdg_config);
         cmd.env("XDG_DOWNLOAD_DIR", &downloads);
     }
 

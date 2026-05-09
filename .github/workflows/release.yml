@@ -169,36 +169,27 @@ jobs:
           mkdir -p runtime-deps
           bash scripts/build-ffmpeg-macos.sh runtime-deps/
         shell: "bash"
-      - name: "Install GnuPG 2.x via winget (Windows)"
+      - name: "Use Git-for-Windows mingw64 gpg 2.x (Windows)"
         if: "runner.os == 'Windows'"
         run: |
-          $ErrorActionPreference = 'Continue'
-          $PSNativeCommandUseErrorActionPreference = $false
-          $ProgressPreference = 'SilentlyContinue'
+          $ErrorActionPreference = 'Stop'
 
-          # Idempotent guard. --accept-source-agreements on the `list` side prevents
-          # a first-run agreement-prompt from non-zero-exiting before the package
-          # match evaluates (would consume the single-shot AC #9 GHA budget).
-          winget list --id GnuPG.GnuPG --exact --accept-source-agreements > $null 2>&1
-          if ($LASTEXITCODE -ne 0) {
-            winget install --id GnuPG.GnuPG --silent --accept-source-agreements --accept-package-agreements
+          # Modern Git for Windows ships gpg 2.x at this path. Test-Path makes a
+          # future layout drift a loud failure on this step rather than silent
+          # gpg-1.4.x usage downstream.
+          $gpgBin = 'C:\Program Files\Git\mingw64\bin'
+          if (-not (Test-Path -LiteralPath (Join-Path $gpgBin 'gpg.exe'))) {
+            throw "Expected gpg 2.x at $gpgBin\gpg.exe (modern Git-for-Windows path) — layout drift?"
           }
 
-          # PATH-prepend: GnuPG installer default since 2.0; stable for ~25 years.
-          # Test-Path makes a future layout drift a loud failure on this step rather
-          # than silent gpg-1.4.x usage downstream. Prepend ensures the new gpg sits
-          # earlier than Git-for-Windows's C:\Program Files\Git\usr\bin on PATH.
-          $gnupgBin = 'C:\Program Files (x86)\gnupg\bin'
-          if (-not (Test-Path -LiteralPath $gnupgBin -PathType Container)) {
-            throw "Expected GnuPG install at $gnupgBin after winget install — layout drift?"
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value $gnupgBin
+          # Prepend so this gpg sits earlier than Git's usr\bin on PATH.
+          Add-Content -Path $env:GITHUB_PATH -Value $gpgBin
         shell: "pwsh"
       - name: "Smoke-check gpg availability (Windows)"
         if: "runner.os == 'Windows'"
         run: |
           $version = gpg --version
-          if ($LASTEXITCODE -ne 0) { throw "gpg not on PATH after winget install" }
+          if ($LASTEXITCODE -ne 0) { throw "gpg not on PATH after PATH-prepend" }
           $firstLine = $version | Select-Object -First 1
           if ($firstLine -notmatch '\bgpg \(GnuPG\) 2\.') {
             throw "Expected gpg 2.x on PATH, got: $firstLine"

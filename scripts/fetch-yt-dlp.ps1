@@ -77,20 +77,34 @@ try {
 
     Write-Host 'verifying GPG signature on SHA2-256SUMS'
     # MSYS-built gpg shipped with Git for Windows (`C:\Program Files\Git\
-    # usr\bin\gpg.exe`) does not accept Windows-style backslash paths from
-    # native pwsh — `gpg --import 'D:\a\...\yt-dlp.asc'` fails with
-    # "error reading ...: General error" because the MSYS path translator
-    # mangles the drive-prefix + backslashes. Two mitigations applied:
-    #   1. Set GNUPGHOME using forward slashes (still a valid Windows path
-    #      but parses cleanly through MSYS).
-    #   2. Pipe the key body into `gpg --import` via stdin so we don't pass
-    #      a path at all. The verify step uses forward-slash paths for the
-    #      same reason.
-    # On Linux/macOS the same forward-slash form is already canonical, so
-    # this is a no-op there.
-    $env:GNUPGHOME = ($gnupgDir.FullName -replace '\\', '/')
+    # usr\bin\gpg.exe`) does not accept native Windows paths — neither
+    # `D:\a\...\yt-dlp.asc` (backslash-mangled) nor `C:/Users/...` (treated
+    # as relative because `C:` isn't a recognised drive prefix in MSYS;
+    # gpg concatenates it onto its own MSYS-style cwd, producing a
+    # nonsense path like `/d/a/yt-dlp-ui/.../C:/Users/.../pubring.kbx`).
+    # Required form is the MSYS canonical: `/c/Users/.../pubring.kbx`
+    # (lowercased drive letter, leading slash, no colon, forward slashes).
+    #
+    # Three mitigations applied below:
+    #   1. Convert GNUPGHOME to MSYS form so gpg can find/create its
+    #      keyring directory.
+    #   2. Pipe the ASCII-armored key body into `gpg --import` via stdin
+    #      so we don't pass a key path at all (simpler than path
+    #      translation, and keeps the script working on Linux/macOS where
+    #      this form is also valid).
+    #   3. Convert the verify-step paths to MSYS form too — those have to
+    #      be argv since gpg --verify doesn't read both files from stdin.
+    function ConvertTo-MsysPath([string]$WindowsPath) {
+        $p = $WindowsPath -replace '\\', '/'
+        if ($p -match '^([A-Za-z]):/(.*)$') {
+            return "/$($matches[1].ToLower())/$($matches[2])"
+        }
+        return $p
+    }
+
+    $env:GNUPGHOME = ConvertTo-MsysPath $gnupgDir.FullName
     Write-Host "gpg path: $((Get-Command gpg).Source)"
-    Write-Host "GNUPGHOME: $env:GNUPGHOME"
+    Write-Host "GNUPGHOME (MSYS): $env:GNUPGHOME"
     Write-Host "key path: $keyPath"
 
     # Pipe key content via stdin to bypass any path-translation issue.
@@ -105,8 +119,8 @@ try {
         exit 74
     }
 
-    $sigPath  = (Join-Path $workDir 'SHA2-256SUMS.sig') -replace '\\', '/'
-    $sumsPath = (Join-Path $workDir 'SHA2-256SUMS')     -replace '\\', '/'
+    $sigPath  = ConvertTo-MsysPath (Join-Path $workDir 'SHA2-256SUMS.sig')
+    $sumsPath = ConvertTo-MsysPath (Join-Path $workDir 'SHA2-256SUMS')
     $verifyOut = & gpg --batch --verify $sigPath $sumsPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "--- gpg --verify output ---"

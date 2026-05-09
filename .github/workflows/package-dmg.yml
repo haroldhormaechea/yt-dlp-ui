@@ -56,6 +56,24 @@ jobs:
             echo "tarball_sha256=${FFMPEG_TARBALL_SHA256_SOURCE}"
           } >> "${GITHUB_OUTPUT}"
 
+      # UC 23 (2026-05-09): nasm provides the x86 SIMD assembler that
+      # ffmpeg's `./configure` auto-detects when targeting x86_64. The
+      # x86_64 `arch -x86_64 ...` cross-build below fails at configure
+      # without nasm; the aarch64 native build doesn't strictly need it,
+      # but we install uniformly to keep the step shape identical to
+      # ci/dist-build-setup.yml's macOS path. Idempotent (safe to re-run);
+      # cache-warm runners short-circuit on `brew list`. Must come BEFORE
+      # the build steps below — when the per-arch cache misses, that's
+      # where the missing-nasm error would otherwise surface. The
+      # `if: runner.os == 'macOS'` guard is technically redundant on this
+      # job (`runs-on: macos-latest`) but kept for copy-paste consistency
+      # with the dist-build-setup.yml splice.
+      - name: "Install nasm (macOS) for ffmpeg x86_64 cross-build (UC 23)"
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew list nasm &>/dev/null || brew install nasm
+
       # Per-arch cache: building ffmpeg from source on a macOS runner
       # takes ~10–15 minutes. Caching halves the average release-pipeline
       # wall-clock when the pin doesn't change between runs.

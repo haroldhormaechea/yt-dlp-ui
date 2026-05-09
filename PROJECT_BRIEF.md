@@ -2,7 +2,6 @@
 schema_version: 1
 project:
   name: "yt-dlp-ui"
-  target_dir: "/Users/hhormaechea/Projects/yt-dlp-ui"
   maturity_target: mvp
 stack:
   languages: ["rust"]

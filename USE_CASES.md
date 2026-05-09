@@ -29,4 +29,4 @@ Statuses:
 | 17 | [use-cases/17-merge-audio-and-video-with-ffmpeg.md](use-cases/17-merge-audio-and-video-with-ffmpeg.md) | Bundle ffmpeg to merge YouTube audio + video streams | done | 2026-05-07 |
 | 18 | [use-cases/18-about-dialog-version-and-licenses.md](use-cases/18-about-dialog-version-and-licenses.md) | About dialog — version + bundled-software licenses | done | 2026-05-08 |
 | 19 | [use-cases/19-audio-only-vs-audio-video-toggle.md](use-cases/19-audio-only-vs-audio-video-toggle.md) | Per-URL audio-only vs. audio+video toggle on AddBar | done | 2026-05-08 |
-| 20 | [use-cases/20-extract-to-standalone-repo.md](use-cases/20-extract-to-standalone-repo.md) | Extract fork into a standalone GitHub repo | in-progress | 2026-05-08 |
+| 20 | [use-cases/20-extract-to-standalone-repo.md](use-cases/20-extract-to-standalone-repo.md) | Extract fork into a standalone GitHub repo | done | 2026-05-09 |

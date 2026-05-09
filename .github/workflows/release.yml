@@ -158,15 +158,6 @@ jobs:
           mkdir -p runtime-deps
           bash scripts/fetch-ffmpeg.sh "${{ matrix.targets[0] }}" runtime-deps/
         shell: "bash"
-      # UC 23 (2026-05-09): nasm provides the x86 SIMD assembler that
-      # ffmpeg's `./configure` auto-detects when targeting x86_64. arm64
-      # doesn't strictly need it, but we install uniformly on every macOS
-      # runner rather than gating per-target. Cache-cold runners pay one
-      # ~10–30 s install; cache-warm runners short-circuit on `brew list`.
-      # Idempotent: safe to re-run on rerun-with-cache. Must come BEFORE
-      # the ffmpeg build step below, where the missing-nasm error surfaces.
-      # Source: ci/dist-build-setup.yml. cargo-dist's `dist generate
-      # --mode ci` will reproduce this step shape on the next regen.
       - name: "Install nasm (macOS) for ffmpeg x86_64 cross-build (UC 23)"
         if: "runner.os == 'macOS'"
         run: |

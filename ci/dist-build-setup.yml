@@ -84,39 +84,71 @@
     mkdir -p runtime-deps
     bash scripts/build-ffmpeg-macos.sh runtime-deps/
 
-# UC 24 (2026-05-09): Provide GnuPG 2.x on PATH for Windows release runners.
-# Required because upstream yt-dlp's signing key is ASCII-armored in 2.x
-# format and cannot be imported by Git-for-Windows's bundled gpg 1.4.x at
-# `C:\Program Files\Git\usr\bin\gpg.exe` (the previous fallback before UC 24).
+# UC 24 (2026-05-09, third iteration): probe known paths for a gpg 2.x
+# binary on the Windows GHA runner image and prepend its directory to PATH.
 #
-# Initial implementation tried `winget install --id GnuPG.GnuPG`. The first
-# v0.5.0 Release run after the UC 22-24 push proved that path-broken on the
-# windows-2022 runner image: `winget` is not on the SYSTEM PATH for the
-# pwsh shell GHA invokes (`The term 'winget' is not recognized`). That
-# matched UC 24's documented Pitfall #1 and consumed AC #9 budget.
+# History on this step (all in one v0.5.0 push cycle):
+#   1. Initial UC 24 tried `winget install --id GnuPG.GnuPG`. Failed — winget
+#      is not on the SYSTEM PATH for the pwsh shell GHA invokes on the
+#      windows-2022 runner image (`The term 'winget' is not recognized`).
+#      Matched UC 24 Pitfall #1.
+#   2. Rollback option (b) from the UC 24 commit body — detect gpg.exe at
+#      `C:\Program Files\Git\mingw64\bin\gpg.exe`. Failed — modern Git for
+#      Windows on the GHA runner ships gpg.exe at `usr\bin`, NOT
+#      `mingw64\bin`. The UC 24 description's path assumption was outdated
+#      for the current runner image.
+#   3. (this) Probe multiple known paths, print version at each, fail
+#      loudly only if NO candidate is gpg 2.x. Resilient to runner-image
+#      drift and surfaces the actual paths/versions for future maintenance.
 #
-# Rollback option (b) from the UC 24 commit body: detect modern Git-for-
-# Windows's gpg.exe at `C:\Program Files\Git\mingw64\bin\gpg.exe` (gpg 2.x
-# since Git for Windows 2.21 in 2019; pre-installed on every GHA runner)
-# and prepend that dir to PATH so it shadows the older `Git\usr\bin\gpg.exe`
-# (gpg 1.4.x) that's earlier on the default PATH. No installation needed,
-# no agreement prompts, no third-party action.
-- name: Use Git-for-Windows mingw64 gpg 2.x (Windows)
+# UC 24's premise (Git for Windows ships gpg 1.4.x; need to install 2.x)
+# was correct ~2018-2019 but is outdated for modern GfW. GfW 2.21+ (Jul 2019)
+# ships gpg 2.x at usr\bin, and the runner has GfW 2.45+. The probe step
+# converges on whichever path holds gpg 2.x without relying on an outdated
+# shape claim.
+- name: "Locate gpg 2.x on Windows runner (UC 24)"
   if: runner.os == 'Windows'
   shell: pwsh
   run: |
     $ErrorActionPreference = 'Stop'
 
-    # Modern Git for Windows ships gpg 2.x at this path. Test-Path makes a
-    # future layout drift a loud failure on this step rather than silent
-    # gpg-1.4.x usage downstream.
-    $gpgBin = 'C:\Program Files\Git\mingw64\bin'
-    if (-not (Test-Path -LiteralPath (Join-Path $gpgBin 'gpg.exe'))) {
-      throw "Expected gpg 2.x at $gpgBin\gpg.exe (modern Git-for-Windows path) — layout drift?"
+    # Known paths where gpg 2.x may live on Windows runner images:
+    # - Git for Windows 2.21+ (Jul 2019) ships gpg 2.x at usr\bin
+    # - Older docs / some installs reference mingw64\bin
+    # - winget / MSI installs of standalone GnuPG use Program Files paths
+    $candidates = @(
+      'C:\Program Files\Git\usr\bin\gpg.exe',
+      'C:\Program Files\Git\mingw64\bin\gpg.exe',
+      'C:\Program Files (x86)\gnupg\bin\gpg.exe',
+      'C:\Program Files\GnuPG\bin\gpg.exe'
+    )
+
+    $found = $null
+    foreach ($cand in $candidates) {
+      if (Test-Path -LiteralPath $cand) {
+        try {
+          $firstLine = (& $cand --version 2>&1 | Select-Object -First 1).ToString()
+        } catch {
+          Write-Host "Probed $cand but --version failed: $_"
+          continue
+        }
+        Write-Host "Probed $cand -> $firstLine"
+        if ($firstLine -match '\bgpg \(GnuPG\) 2\.') {
+          $found = $cand
+          break
+        }
+      } else {
+        Write-Host "Probed $cand -> not present"
+      }
     }
 
-    # Prepend so this gpg sits earlier than Git's usr\bin on PATH.
-    Add-Content -Path $env:GITHUB_PATH -Value $gpgBin
+    if (-not $found) {
+      throw "No gpg 2.x found at any known Windows path. Runner image may have changed; review the candidate list and update."
+    }
+
+    $foundDir = Split-Path -Parent $found
+    Write-Host "Using gpg 2.x at: $found"
+    Add-Content -Path $env:GITHUB_PATH -Value $foundDir
 
 - name: Smoke-check gpg availability (Windows)
   if: runner.os == 'Windows'

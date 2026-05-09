@@ -10,7 +10,10 @@ ci = "github"
 # The installers to generate for each app
 installers = []
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# TEMP DEBUG (UC 24 followup): Windows-only while we triage gpg --import
+# failure on windows-2022 runner. Restore full list before merging:
+# targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+targets = ["x86_64-pc-windows-msvc"]
 # UC 06 — bundled-binary `include` list. Two entries (canonical-name approach,
 # Smoke 1 outcome): cargo-dist 0.31.0's `include` is a single global list and
 # fails the build on missing entries, so fetch scripts produce a single

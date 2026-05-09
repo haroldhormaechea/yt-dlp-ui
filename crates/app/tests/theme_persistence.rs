@@ -53,10 +53,30 @@ fn run_smoke(data_dir: &Path, bin_dir: &Path) {
     cmd.env("YT_DLP_UI_SMOKE", "1")
         .env("PATH", &path_var)
         .env("RUST_LOG", "info");
+    // The app calls `paths::default_download_dir()` at startup, which goes
+    // through `directories::UserDirs`. UserDirs on Linux reads
+    // `$XDG_CONFIG_HOME/user-dirs.dirs` (NOT the env var of the same name);
+    // fresh GHA Ubuntu runners have no such file. Stage one in the parent
+    // of `data_dir` (callers always pass `tmp.path().join("data")`).
     if cfg!(target_os = "macos") {
         cmd.env("HOME", data_dir);
     } else {
+        let scratch = data_dir.parent().expect("data_dir has a parent tempdir");
+        let downloads = scratch.join("Downloads");
+        std::fs::create_dir_all(&downloads).expect("mkdir Downloads");
+        let xdg_config = scratch.join(".config");
+        std::fs::create_dir_all(&xdg_config).expect("mkdir .config");
+        let user_dirs_file = xdg_config.join("user-dirs.dirs");
+        std::fs::write(
+            &user_dirs_file,
+            format!("XDG_DOWNLOAD_DIR=\"{}\"\n", downloads.display()),
+        )
+        .expect("write user-dirs.dirs");
         cmd.env("XDG_DATA_HOME", data_dir);
+        cmd.env("HOME", scratch);
+        cmd.env("USERPROFILE", scratch);
+        cmd.env("XDG_CONFIG_HOME", &xdg_config);
+        cmd.env("XDG_DOWNLOAD_DIR", &downloads);
     }
 
     let output = cmd.output().expect("run app");

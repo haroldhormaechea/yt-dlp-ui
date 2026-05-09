@@ -71,13 +71,33 @@ fn smoke_run_exits_zero_and_logs_smoke_ok() {
         .env("PATH", &path_var)
         .env("RUST_LOG", "info");
 
+    // The app calls `paths::default_download_dir()` at startup, which goes
+    // through `directories::UserDirs`. UserDirs on Linux reads
+    // `$XDG_CONFIG_HOME/user-dirs.dirs` (NOT the env var of the same name);
+    // fresh GHA runners have no such file. Stage one. macOS uses CFNetwork
+    // and returns ~/Downloads regardless of physical existence, so
+    // HOME=tmp/data is sufficient there.
     if cfg!(target_os = "macos") {
         // Slight tweak: `directories` builds Application Support relative to
         // HOME, so HOME=tmp/data routes the SQLite db into tmp/data/Library/
         // Application Support/yt-dlp-ui/db.sqlite.
         cmd.env("HOME", &data_dir);
     } else {
+        let downloads = tmp.path().join("Downloads");
+        fs::create_dir_all(&downloads).expect("mkdir Downloads");
+        let xdg_config = tmp.path().join(".config");
+        fs::create_dir_all(&xdg_config).expect("mkdir .config");
+        let user_dirs_file = xdg_config.join("user-dirs.dirs");
+        fs::write(
+            &user_dirs_file,
+            format!("XDG_DOWNLOAD_DIR=\"{}\"\n", downloads.display()),
+        )
+        .expect("write user-dirs.dirs");
         cmd.env("XDG_DATA_HOME", &data_dir);
+        cmd.env("HOME", tmp.path());
+        cmd.env("USERPROFILE", tmp.path());
+        cmd.env("XDG_CONFIG_HOME", &xdg_config);
+        cmd.env("XDG_DOWNLOAD_DIR", &downloads);
     }
 
     let output = cmd.output().expect("run app");

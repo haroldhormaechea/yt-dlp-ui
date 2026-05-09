@@ -8,6 +8,10 @@ macOS x86_64 builds in cargo-dist's Release pipeline fail at `scripts/build-ffmp
 2. macOS arm64 build-local-artifacts continues to succeed (regression guard — UC 20's only previously-working target).
 3. The universal `.dmg` lipo-merge in `installer/build-macos-dmg.sh` produces a fat Mach-O binary with both architectures (`lipo -info` reports both `x86_64` and `arm64`).
 4. `ci/dist-build-setup.yml` adds `brew install nasm` (or `brew install nasm yasm` if either suffices for ffmpeg's configure) on macOS runners. Add idempotently (`brew list nasm &>/dev/null || brew install nasm`) since brew install is slow on cache-warm runners.
+
+   **Drift note (recorded during UC 23 implementation):** the same idempotent install is also added to `.github/workflows/package-dmg.yml` (between `Read ffmpeg pins` and `Cache ffmpeg (aarch64)`) so that any future cache-miss in the dmg-packaging workflow doesn't silently re-introduce the nasm failure. Cache key (which includes `hashFiles('scripts/build-ffmpeg-macos.sh')` + ffmpeg pin SHAs) is unchanged; existing caches remain valid.
+
+   **AC #5 local-prerequisite note:** AC #5's `arch -x86_64 bash scripts/build-ffmpeg-macos.sh ...` will fail with the same "nasm not found" error if the user's M-series Mac doesn't have nasm installed locally. The user must run `brew install nasm` once on their Mac before running the Rosetta pre-flight.
 5. **Local verification gate (load-bearing):** before pushing, the dev team runs:
    ```
    arch -x86_64 bash scripts/build-ffmpeg-macos.sh /tmp/ffmpeg-x86-test/

@@ -6,7 +6,9 @@ Linux builds in cargo-dist's Release pipeline fail with `gdk-sys v0.18.2 build f
 ## Acceptance Criteria
 1. Linux x86_64 build-local-artifacts succeeds end-to-end on the GHA Release pipeline.
 2. Linux arm64 build-local-artifacts succeeds end-to-end.
-3. `ci/dist-build-setup.yml` installs the following packages on Linux runners (gated by `runner.os == 'Linux'`): `libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev pkg-config build-essential`. Whether the existing duplicate installs in `package-deb-rpm.yml` stay or are consolidated is the analyst's call (recommend keeping for now — package-* runs on a fresh runner).
+3. `ci/dist-build-setup.yml` installs the following packages on Linux runners (gated by `runner.os == 'Linux'`): `libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev pkg-config build-essential`. **Note:** `package-deb-rpm.yml` does NOT install GTK/WebKit/SSL apt deps today (it only does `sudo mv nfpm` — nfpm is a Go binary that consumes prebuilt artifacts; no Rust compile in that job). The earlier draft of this AC referenced "duplicate installs in `package-deb-rpm.yml`" — that was a misremember of UC 20's `ci.yml` install; corrected here. No consolidation work in `package-deb-rpm.yml` is needed.
+
+   **Mandatory same-commit co-modification:** because cargo-dist's splice mechanism is build-time (not runtime), `.github/workflows/release.yml` MUST be regenerated (or hand-edited) in the same commit so the inlined splice picks up the new step. Without that, GHA runs the old `release.yml` and the install is invisible at workflow-run time. Preferred path: `dist generate --mode ci` from the repo root. Fallback: hand-edit `release.yml` between the existing `Install Rust non-interactively if not already installed` step and the `Fetch yt-dlp + deno (Linux/macOS)` step, matching the YAML quoting style of surrounding inlined-splice steps.
 4. **Local verification gate (load-bearing):** before pushing, the dev team runs both arches:
    ```
    docker run --rm --platform linux/amd64 -v $(pwd):/work -w /work ubuntu:24.04 bash -c \

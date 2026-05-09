@@ -6,8 +6,9 @@ Deno v2.x's `.sha256sum` file format differs from v1.x. UC 17's `scripts/fetch-d
 ## Acceptance Criteria
 1. `scripts/fetch-deno.sh` parses deno v2.x's `.sha256sum` file format and extracts the SHA correctly for every supported target triple (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`).
 2. `scripts/fetch-deno.ps1` parses the same v2.x format identically.
-3. New `scripts/test-fetch-deno.bats` file: hermetic bats test using a fixture `.sha256sum` captured via `gh api repos/denoland/deno/releases/tags/v2.7.14 --jq '.assets[] | select(.name=="deno-x86_64-unknown-linux-gnu.zip.sha256sum") | .browser_download_url'` and curled into `scripts/tests/fixtures/deno-v2.7.14.sha256sum`. Test cases:
-   - Positive: parser extracts the correct 64-char SHA from the fixture.
+3. New `scripts/test-fetch-deno.bats` file: hermetic bats test using **two** committed fixtures (Linux and Windows), since deno v2.x emits **two different `.sha256sum` shapes** depending on the build runner — GNU coreutils format for Unix triples, PowerShell `Get-FileHash | Format-List` output for `x86_64-pc-windows-msvc`. Capture both via `curl -fsSL "https://github.com/denoland/deno/releases/download/v2.7.14/deno-<triple>.zip.sha256sum"` into `scripts/tests/fixtures/deno-v2.7.14-unix.sha256sum` (using `x86_64-unknown-linux-gnu`) and `scripts/tests/fixtures/deno-v2.7.14-windows.sha256sum` (using `x86_64-pc-windows-msvc`). Test cases:
+   - Positive: parser extracts the correct 64-char SHA from the **Unix-format** fixture.
+   - Positive: parser extracts the correct 64-char SHA from the **Windows-format** fixture.
    - Negative: malformed format → exit non-zero with a clear error message.
    - Negative: empty file → exit non-zero.
    - Negative: SHA mismatch in the fixture → exit 73 (existing convention).

@@ -10,6 +10,35 @@
 # YT_DLP_VERSION / DENO_VERSION are repeated on each step that needs them.
 # Bumping is a manual PR — see scripts/README.md § Bump procedure.
 
+# UC 22 (2026-05-09): Linux native deps for the cargo-dist `dist build
+# --profile=dist` step in build-local-artifacts. This package set is a
+# DELIBERATE STRICT SUPERSET of `.github/workflows/ci.yml`'s clippy/test
+# install — `libgtk-3-dev` is the addition. It is required by `gdk-sys`
+# v0.18.2 (transitively pulled by `rfd 0.15` at crates/app/Cargo.toml:53),
+# which is only reachable from a full release-build compile. ci.yml's
+# `cargo test` does not exercise the GTK paths reachable from `rfd`, which
+# is why `libgtk-3-dev` is intentionally absent there.
+#
+# ANTI-CONSOLIDATION WARNING: do NOT "consolidate" by stripping
+# `libgtk-3-dev` from this list to match ci.yml — that re-breaks the Linux
+# Release build (gdk-sys: gdk-3.0 not found). The asymmetry is intentional.
+# See use-cases/22-fix-linux-release-build.md.
+- name: Install Linux native deps for wry + rfd (UC 22)
+  if: runner.os == 'Linux'
+  shell: bash
+  run: |
+    # Defensive sudo handling: GHA hosted runners have a non-root user with
+    # passwordless sudo, but a future containerized-build transition would
+    # run as root with no `sudo` binary present. `id -u` is a shell builtin
+    # equivalent, available everywhere bash is.
+    if [ "$(id -u)" = "0" ]; then
+      SUDO=""
+    else
+      SUDO="sudo"
+    fi
+    $SUDO apt-get update
+    $SUDO apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev pkg-config build-essential
+
 - name: Fetch yt-dlp + deno (Linux/macOS)
   if: runner.os == 'Linux' || runner.os == 'macOS'
   shell: bash

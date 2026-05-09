@@ -127,6 +127,21 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: "Install Linux native deps for wry + rfd (UC 22)"
+        if: "runner.os == 'Linux'"
+        run: |
+          # Defensive sudo handling: GHA hosted runners have a non-root user with
+          # passwordless sudo, but a future containerized-build transition would
+          # run as root with no `sudo` binary present. `id -u` is a shell builtin
+          # equivalent, available everywhere bash is.
+          if [ "$(id -u)" = "0" ]; then
+            SUDO=""
+          else
+            SUDO="sudo"
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev pkg-config build-essential
+        shell: "bash"
       - name: "Fetch yt-dlp + deno (Linux/macOS)"
         if: "runner.os == 'Linux' || runner.os == 'macOS'"
         run: |

@@ -76,12 +76,27 @@ try {
     Invoke-WebRequest -Uri "$baseUrl/SHA2-256SUMS.sig" -OutFile (Join-Path $workDir 'SHA2-256SUMS.sig') -UseBasicParsing
 
     Write-Host 'verifying GPG signature on SHA2-256SUMS'
-    # Isolated GNUPGHOME — `gpg` reads $env:GNUPGHOME at process spawn time.
-    $env:GNUPGHOME = $gnupgDir.FullName
+    # MSYS-built gpg shipped with Git for Windows (`C:\Program Files\Git\
+    # usr\bin\gpg.exe`) does not accept Windows-style backslash paths from
+    # native pwsh — `gpg --import 'D:\a\...\yt-dlp.asc'` fails with
+    # "error reading ...: General error" because the MSYS path translator
+    # mangles the drive-prefix + backslashes. Two mitigations applied:
+    #   1. Set GNUPGHOME using forward slashes (still a valid Windows path
+    #      but parses cleanly through MSYS).
+    #   2. Pipe the key body into `gpg --import` via stdin so we don't pass
+    #      a path at all. The verify step uses forward-slash paths for the
+    #      same reason.
+    # On Linux/macOS the same forward-slash form is already canonical, so
+    # this is a no-op there.
+    $env:GNUPGHOME = ($gnupgDir.FullName -replace '\\', '/')
     Write-Host "gpg path: $((Get-Command gpg).Source)"
     Write-Host "GNUPGHOME: $env:GNUPGHOME"
     Write-Host "key path: $keyPath"
-    $importOut = & gpg --batch --import $keyPath 2>&1
+
+    # Pipe key content via stdin to bypass any path-translation issue.
+    # The yt-dlp signing key is ASCII-armored, so text mode is safe.
+    $keyText = Get-Content -Raw -LiteralPath $keyPath
+    $importOut = $keyText | & gpg --batch --import 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "--- gpg --import output ---"
         $importOut | ForEach-Object { Write-Host $_ }
@@ -89,7 +104,10 @@ try {
         [Console]::Error.WriteLine('gpg --import failed')
         exit 74
     }
-    $verifyOut = & gpg --batch --verify (Join-Path $workDir 'SHA2-256SUMS.sig') (Join-Path $workDir 'SHA2-256SUMS') 2>&1
+
+    $sigPath  = (Join-Path $workDir 'SHA2-256SUMS.sig') -replace '\\', '/'
+    $sumsPath = (Join-Path $workDir 'SHA2-256SUMS')     -replace '\\', '/'
+    $verifyOut = & gpg --batch --verify $sigPath $sumsPath 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host "--- gpg --verify output ---"
         $verifyOut | ForEach-Object { Write-Host $_ }

@@ -2,7 +2,19 @@
 # fetch-deno.ps1 — PowerShell parallel of fetch-deno.sh for Windows GHA runners.
 # Same argv contract: <target-triple> <output-dir>.
 #
-# Required env: $env:DENO_VERSION (e.g. "1.47.2").
+# Required env: $env:DENO_VERSION (e.g. "2.7.14"). v2-only: the
+# `.sha256sum` parser used here only handles deno v2.x file shapes
+# (GNU coreutils on Unix runners, `Get-FileHash | Format-List` on Windows
+# runners). Re-pinning to a v1.x release will break parsing — see
+# scripts/README.md § "Bump procedure" for the v2-only assumption.
+#
+# Optional env: $env:DENO_BASE_URL — overrides the GitHub release base URL.
+#
+# Exit codes:
+#   65 — DENO_VERSION env var missing
+#   71 — unzipped archive missing the expected binary
+#   72 — could not parse the upstream `.sha256sum` file (no 64-hex match)
+#   73 — SHA256 mismatch between fetched archive and expected hash
 #
 # SHA-only verification (deno does not publish GPG signatures; THREATS.md
 # § T11 documents this asymmetry vs. yt-dlp's SHA+GPG posture).
@@ -12,7 +24,8 @@
 # and falls back to deno).
 #
 # This script is paired with fetch-deno.sh — every fix in one MUST land in
-# the other (see scripts/README.md § Dual-script discipline).
+# the other (see scripts/README.md § Dual-script discipline). They share
+# the SHA-parser via lib-deno-sha.{sh,ps1}.
 
 [CmdletBinding()]
 param(
@@ -25,6 +38,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+. (Join-Path $PSScriptRoot 'lib-deno-sha.ps1')
 
 if (-not $env:DENO_VERSION) {
     [Console]::Error.WriteLine('DENO_VERSION env var is required')
@@ -49,14 +64,13 @@ try {
     Invoke-WebRequest -Uri "$baseUrl/$shaAsset" -OutFile (Join-Path $workDir $shaAsset) -UseBasicParsing
 
     Write-Host 'verifying SHA256'
-    # The .sha256sum file has format: "<hash>  <asset>"
-    $expectedSha = (Get-Content -LiteralPath (Join-Path $workDir $shaAsset) | Select-Object -First 1) -split '\s+' | Select-Object -First 1
-    if (-not $expectedSha) {
-        [Console]::Error.WriteLine("could not parse $shaAsset")
+    try {
+        $expectedSha = Get-DenoExpectedSha -Path (Join-Path $workDir $shaAsset)
+    } catch {
         exit 72
     }
     $actualSha = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workDir $asset)).Hash.ToLower()
-    if ($expectedSha.ToLower() -ne $actualSha) {
+    if ($expectedSha -ne $actualSha) {
         [Console]::Error.WriteLine("sha256 mismatch for ${asset}: expected $expectedSha, got $actualSha")
         exit 73
     }

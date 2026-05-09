@@ -88,6 +88,8 @@ jobs:
         run: bats scripts/test-fetch-yt-dlp.bats
       - name: Run scripts/test-fetch-ffmpeg.bats
         run: bats scripts/test-fetch-ffmpeg.bats
+      - name: Run scripts/test-fetch-deno.bats
+        run: bats scripts/test-fetch-deno.bats
 
   scripts-pwsh:
     name: pwsh (scripts)

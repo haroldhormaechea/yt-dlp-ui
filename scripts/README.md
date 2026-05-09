@@ -66,6 +66,39 @@ upstream FFmpeg source tarball pin used by the macOS source build.
    env-var bump (it doesn't touch the workflow shape).
 4. Tag a release once merged.
 
+#### deno v2-only `.sha256sum` parser (UC 21)
+
+The deno fetch scripts only parse the **deno v2.x** `.sha256sum` file
+format. v2.x emits two different shapes depending on which CI runner
+produced the asset:
+
+* **Unix triples** (`*-unknown-linux-gnu`, `*-apple-darwin`) — GNU
+  coreutils format: `<64-hex-hash>  <asset-filename>`.
+* **Windows triples** (`x86_64-pc-windows-msvc`) — PowerShell
+  `Get-FileHash | Format-List` output:
+  ```
+  Algorithm : SHA256
+  Hash      : <64-hex-hash>
+  Path      : C:\...\deno-x86_64-pc-windows-msvc.zip
+  ```
+
+The shared parser in `lib-deno-sha.sh` / `lib-deno-sha.ps1` handles both
+by extracting the **first 64-hex-character run anywhere in the file**.
+Re-pinning `DENO_VERSION` to a deno v1.x release would emit a different
+shape and break parsing — bump forward only.
+
+To resync the bats fixtures after a `DENO_VERSION` bump (regenerates
+both Unix and Windows shapes from upstream):
+
+```sh
+for triple in x86_64-unknown-linux-gnu x86_64-pc-windows-msvc; do
+    suffix="$( [[ ${triple} == *windows* ]] && echo windows || echo unix )"
+    curl -fsSL \
+        "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${triple}.zip.sha256sum" \
+        -o "scripts/tests/fixtures/deno-v${DENO_VERSION}-${suffix}.sha256sum"
+done
+```
+
 ### ffmpeg
 
 1. Pick a new BtbN release tag (`autobuild-YYYY-MM-DD-HH-MM`). Avoid
@@ -120,6 +153,17 @@ implementation lands in the other in the same PR. Specifically:
   archive entry).
 - Canonical destination filename (`yt-dlp` and `deno`, no extension, on
   every OS — see below).
+
+The deno scripts also share a **lib-pair** — `lib-deno-sha.sh` and
+`lib-deno-sha.ps1` — which holds the `.sha256sum` parser. The pair is a
+first-class part of the dual-script discipline: the two libs MUST stay in
+lockstep on the parser rule (first 64-hex-character match in the file
+content, lower-cased), the exit / throw semantics on parse failure
+(stderr `could not parse <path>` + exit 72 in the calling script), the
+error message wording, and edge-input behavior (BOM, `\r\n` line endings,
+leading whitespace, malformed/empty files). Test changes affecting the
+parser MUST exercise both libs via `test-fetch-deno.bats` and
+`test-fetch-ps1.ps1`.
 
 CI runs both `scripts/test-fetch-yt-dlp.bats` and `scripts/test-fetch-ps1.ps1`
 on every push and pull request via `.github/workflows/ci.yml`.

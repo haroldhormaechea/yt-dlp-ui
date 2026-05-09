@@ -25,7 +25,7 @@ jobs:
       # job will fail loudly and the bump procedure (re-pin SHA + PR) is
       # the same as for any other supply-chain pinned binary.
       WEBVIEW2_BOOTSTRAPPER_URL: "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
-      WEBVIEW2_BOOTSTRAPPER_SHA256: "5cb35e73342e3bdfea0293d1598a8e10d32d5fce78e55acb5ead00ab918e63fb"
+      WEBVIEW2_BOOTSTRAPPER_SHA256: "cb9b76a6dace90f5d4635f2d49cbb55a62f41e5e365a22cef4265c013af0bcdd"
       YT_DLP_VERSION: "2026.03.17"
       DENO_VERSION: "2.7.14"
 

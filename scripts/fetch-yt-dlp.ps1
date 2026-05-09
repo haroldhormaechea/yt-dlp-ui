@@ -78,13 +78,22 @@ try {
     Write-Host 'verifying GPG signature on SHA2-256SUMS'
     # Isolated GNUPGHOME — `gpg` reads $env:GNUPGHOME at process spawn time.
     $env:GNUPGHOME = $gnupgDir.FullName
-    & gpg --batch --quiet --import $keyPath 2>&1 | Out-Null
+    Write-Host "gpg path: $((Get-Command gpg).Source)"
+    Write-Host "GNUPGHOME: $env:GNUPGHOME"
+    Write-Host "key path: $keyPath"
+    $importOut = & gpg --batch --import $keyPath 2>&1
     if ($LASTEXITCODE -ne 0) {
+        Write-Host "--- gpg --import output ---"
+        $importOut | ForEach-Object { Write-Host $_ }
+        Write-Host "--- end ---"
         [Console]::Error.WriteLine('gpg --import failed')
         exit 74
     }
-    & gpg --batch --quiet --verify (Join-Path $workDir 'SHA2-256SUMS.sig') (Join-Path $workDir 'SHA2-256SUMS') 2>&1 | Out-Null
+    $verifyOut = & gpg --batch --verify (Join-Path $workDir 'SHA2-256SUMS.sig') (Join-Path $workDir 'SHA2-256SUMS') 2>&1
     if ($LASTEXITCODE -ne 0) {
+        Write-Host "--- gpg --verify output ---"
+        $verifyOut | ForEach-Object { Write-Host $_ }
+        Write-Host "--- end ---"
         [Console]::Error.WriteLine('GPG verification failed for SHA2-256SUMS')
         exit 74
     }

@@ -30,3 +30,7 @@ Statuses:
 | 18 | [use-cases/18-about-dialog-version-and-licenses.md](use-cases/18-about-dialog-version-and-licenses.md) | About dialog — version + bundled-software licenses | done | 2026-05-08 |
 | 19 | [use-cases/19-audio-only-vs-audio-video-toggle.md](use-cases/19-audio-only-vs-audio-video-toggle.md) | Per-URL audio-only vs. audio+video toggle on AddBar | done | 2026-05-08 |
 | 20 | [use-cases/20-extract-to-standalone-repo.md](use-cases/20-extract-to-standalone-repo.md) | Extract fork into a standalone GitHub repo | done | 2026-05-09 |
+| 21 | [use-cases/21-fix-fetch-deno-v2-sha256sum-parser.md](use-cases/21-fix-fetch-deno-v2-sha256sum-parser.md) | Fix fetch-deno scripts for deno v2.x .sha256sum format | pending | 2026-05-09 |
+| 22 | [use-cases/22-fix-linux-release-build.md](use-cases/22-fix-linux-release-build.md) | Fix Linux Release build (gdk-3.0 + WebKit deps in dist-build hook) | pending | 2026-05-09 |
+| 23 | [use-cases/23-fix-macos-x86_64-release-build.md](use-cases/23-fix-macos-x86_64-release-build.md) | Fix macOS x86_64 Release build (nasm for ffmpeg cross-build) | pending | 2026-05-09 |
+| 24 | [use-cases/24-fix-windows-release-build.md](use-cases/24-fix-windows-release-build.md) | Fix Windows Release build (modern gpg via winget) | pending | 2026-05-09 |

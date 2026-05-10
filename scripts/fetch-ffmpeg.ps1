@@ -26,6 +26,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib-net-retry.ps1')
+
 $pinsFile = Join-Path $PSScriptRoot 'runtime-deps-pins.env'
 if (-not (Test-Path -LiteralPath $pinsFile -PathType Leaf)) {
     [Console]::Error.WriteLine("pins file not found at $pinsFile")
@@ -84,11 +86,13 @@ $workDir = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetT
 
 try {
     Write-Host "fetching $baseUrl/$asset"
-    Invoke-WebRequest -Uri "$baseUrl/$asset" -OutFile (Join-Path $workDir $asset) -UseBasicParsing
+    Invoke-DownloadWithRetry -Uri "$baseUrl/$asset" -OutFile (Join-Path $workDir $asset)
 
     $remoteSha = $null
     try {
-        Invoke-WebRequest -Uri "$baseUrl/$asset.sha256" -OutFile (Join-Path $workDir "$asset.sha256") -UseBasicParsing -ErrorAction Stop
+        # Retry the sidecar .sha256 download; fall back to in-tree pin if all
+        # attempts fail (the file is optional — not all releases publish it).
+        Invoke-DownloadWithRetry -Uri "$baseUrl/$asset.sha256" -OutFile (Join-Path $workDir "$asset.sha256")
         $first = (Get-Content -LiteralPath (Join-Path $workDir "$asset.sha256") | Select-Object -First 1)
         if ($first) {
             $remoteSha = ($first -split '\s+')[0]

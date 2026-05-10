@@ -59,6 +59,8 @@ TARGET_TRIPLE="$1"
 OUTPUT_DIR="$2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-net-retry.sh
+source "${SCRIPT_DIR}/lib-net-retry.sh"
 PINS_FILE="${SCRIPT_DIR}/runtime-deps-pins.env"
 if [[ ! -f "${PINS_FILE}" ]]; then
     echo "error: pins file not found at ${PINS_FILE}" >&2
@@ -114,15 +116,11 @@ WORK_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t fetch-ffmpeg)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
 echo "fetching ${BASE_URL}/${ASSET}"
-curl --fail --silent --show-error --location \
-    --output "${WORK_DIR}/${ASSET}" \
-    "${BASE_URL}/${ASSET}"
+download_with_retry "${BASE_URL}/${ASSET}" "${WORK_DIR}/${ASSET}"
 
 # checksums.sha256 covers the entire release (one row per asset).
 echo "fetching ${BASE_URL}/${ASSET}.sha256"
-if ! curl --fail --silent --show-error --location \
-    --output "${WORK_DIR}/${ASSET}.sha256" \
-    "${BASE_URL}/${ASSET}.sha256"; then
+if ! download_with_retry "${BASE_URL}/${ASSET}.sha256" "${WORK_DIR}/${ASSET}.sha256"; then
     echo "warning: per-asset .sha256 not published; falling back to in-tree pin only" >&2
     REMOTE_SHA=""
 else

@@ -28,6 +28,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib-net-retry.ps1')
+
 if (-not $env:YT_DLP_VERSION) {
     [Console]::Error.WriteLine('YT_DLP_VERSION env var is required')
     exit 65
@@ -67,13 +69,13 @@ $gnupgDir = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::Get
 
 try {
     Write-Host "fetching $baseUrl/$asset"
-    Invoke-WebRequest -Uri "$baseUrl/$asset" -OutFile (Join-Path $workDir $asset) -UseBasicParsing
+    Invoke-DownloadWithRetry -Uri "$baseUrl/$asset" -OutFile (Join-Path $workDir $asset)
 
     Write-Host "fetching $baseUrl/SHA2-256SUMS"
-    Invoke-WebRequest -Uri "$baseUrl/SHA2-256SUMS" -OutFile (Join-Path $workDir 'SHA2-256SUMS') -UseBasicParsing
+    Invoke-DownloadWithRetry -Uri "$baseUrl/SHA2-256SUMS" -OutFile (Join-Path $workDir 'SHA2-256SUMS')
 
     Write-Host "fetching $baseUrl/SHA2-256SUMS.sig"
-    Invoke-WebRequest -Uri "$baseUrl/SHA2-256SUMS.sig" -OutFile (Join-Path $workDir 'SHA2-256SUMS.sig') -UseBasicParsing
+    Invoke-DownloadWithRetry -Uri "$baseUrl/SHA2-256SUMS.sig" -OutFile (Join-Path $workDir 'SHA2-256SUMS.sig')
 
     Write-Host 'verifying GPG signature on SHA2-256SUMS'
     # MSYS-built gpg shipped with Git for Windows (`C:\Program Files\Git\

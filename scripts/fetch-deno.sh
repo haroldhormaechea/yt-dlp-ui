@@ -55,6 +55,8 @@ if [[ -z "${DENO_VERSION:-}" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-net-retry.sh
+source "${SCRIPT_DIR}/lib-net-retry.sh"
 # shellcheck source=lib-deno-sha.sh
 source "${SCRIPT_DIR}/lib-deno-sha.sh"
 
@@ -69,14 +71,10 @@ WORK_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t fetch-deno)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
 echo "fetching ${BASE_URL}/${ASSET}"
-curl --fail --silent --show-error --location \
-    --output "${WORK_DIR}/${ASSET}" \
-    "${BASE_URL}/${ASSET}"
+download_with_retry "${BASE_URL}/${ASSET}" "${WORK_DIR}/${ASSET}"
 
 echo "fetching ${BASE_URL}/${SHA_ASSET}"
-curl --fail --silent --show-error --location \
-    --output "${WORK_DIR}/${SHA_ASSET}" \
-    "${BASE_URL}/${SHA_ASSET}"
+download_with_retry "${BASE_URL}/${SHA_ASSET}" "${WORK_DIR}/${SHA_ASSET}"
 
 echo "verifying SHA256"
 EXPECTED_SHA="$(parse_deno_sha256sum_file "${WORK_DIR}/${SHA_ASSET}")" || exit 72

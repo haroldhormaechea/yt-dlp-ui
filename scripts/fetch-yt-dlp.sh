@@ -50,9 +50,12 @@ if [[ -z "${YT_DLP_VERSION:-}" ]]; then
     exit 65
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib-net-retry.sh
+source "${SCRIPT_DIR}/lib-net-retry.sh"
+
 # Resolve REPO_ROOT — env override wins, else derive from script location.
 if [[ -z "${REPO_ROOT:-}" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 fi
 
@@ -99,19 +102,13 @@ chmod 700 "${GNUPG_DIR}"
 trap 'rm -rf "${WORK_DIR}" "${GNUPG_DIR}"' EXIT
 
 echo "fetching ${BASE_URL}/${ASSET}"
-curl --fail --silent --show-error --location \
-    --output "${WORK_DIR}/${ASSET}" \
-    "${BASE_URL}/${ASSET}"
+download_with_retry "${BASE_URL}/${ASSET}" "${WORK_DIR}/${ASSET}"
 
 echo "fetching ${BASE_URL}/SHA2-256SUMS"
-curl --fail --silent --show-error --location \
-    --output "${WORK_DIR}/SHA2-256SUMS" \
-    "${BASE_URL}/SHA2-256SUMS"
+download_with_retry "${BASE_URL}/SHA2-256SUMS" "${WORK_DIR}/SHA2-256SUMS"
 
 echo "fetching ${BASE_URL}/SHA2-256SUMS.sig"
-curl --fail --silent --show-error --location \
-    --output "${WORK_DIR}/SHA2-256SUMS.sig" \
-    "${BASE_URL}/SHA2-256SUMS.sig"
+download_with_retry "${BASE_URL}/SHA2-256SUMS.sig" "${WORK_DIR}/SHA2-256SUMS.sig"
 
 echo "verifying GPG signature on SHA2-256SUMS"
 GNUPGHOME="${GNUPG_DIR}" gpg --batch --quiet --import "${KEY_PATH}"

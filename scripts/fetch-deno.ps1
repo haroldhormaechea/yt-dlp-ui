@@ -39,6 +39,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'lib-net-retry.ps1')
 . (Join-Path $PSScriptRoot 'lib-deno-sha.ps1')
 
 if (-not $env:DENO_VERSION) {
@@ -58,10 +59,10 @@ $workDir = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetT
 
 try {
     Write-Host "fetching $baseUrl/$asset"
-    Invoke-WebRequest -Uri "$baseUrl/$asset" -OutFile (Join-Path $workDir $asset) -UseBasicParsing
+    Invoke-DownloadWithRetry -Uri "$baseUrl/$asset" -OutFile (Join-Path $workDir $asset)
 
     Write-Host "fetching $baseUrl/$shaAsset"
-    Invoke-WebRequest -Uri "$baseUrl/$shaAsset" -OutFile (Join-Path $workDir $shaAsset) -UseBasicParsing
+    Invoke-DownloadWithRetry -Uri "$baseUrl/$shaAsset" -OutFile (Join-Path $workDir $shaAsset)
 
     Write-Host 'verifying SHA256'
     try {

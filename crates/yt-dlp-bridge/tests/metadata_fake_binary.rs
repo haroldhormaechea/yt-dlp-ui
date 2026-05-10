@@ -29,7 +29,7 @@ fn write_fake(script: &str) -> (TempDir, PathBuf) {
 
 #[tokio::test]
 async fn get_title_returns_stdout_trimmed() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "  My Test Title  "
 "#,
@@ -45,12 +45,12 @@ echo "  My Test Title  "
     .await
     .expect("get_title");
     assert_eq!(title, "My Test Title");
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_title_empty_stdout_is_error() {
-    let (_tmp, bin) = write_fake("#!/bin/sh\nexit 0\n");
+    let (tmp, bin) = write_fake("#!/bin/sh\nexit 0\n");
     let err = get_title(
         &bin,
         "https://example.com/x",
@@ -62,12 +62,12 @@ async fn get_title_empty_stdout_is_error() {
     .await
     .expect_err("must fail on empty stdout");
     assert!(matches!(err, BridgeError::ExitedWithError { .. }));
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_title_nonzero_exit_is_error() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "boom" >&2
 exit 1
@@ -89,12 +89,12 @@ exit 1
     } else {
         panic!("wrong error variant");
     }
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_title_timeout_is_error() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 sleep 5
 echo "title"
@@ -111,12 +111,12 @@ echo "title"
     .await
     .expect_err("timeout must fail");
     assert!(matches!(err, BridgeError::ExitedWithError { .. }));
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn expand_playlist_returns_entries() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo '{"webpage_url":"https://example.com/p1","title":"P1"}'
 echo '{"webpage_url":"https://example.com/p2","title":"P2"}'
@@ -130,13 +130,13 @@ echo '{"webpage_url":"https://example.com/p3","title":null}'
     assert_eq!(entries[0].url, "https://example.com/p1");
     assert_eq!(entries[0].title.as_deref(), Some("P1"));
     assert_eq!(entries[2].title, None, "null title deserializes to None");
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn expand_playlist_single_entry_matching_input_returns_empty_vec() {
     // Falls back to "single video" semantics.
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo '{"webpage_url":"https://example.com/single","title":"X"}'
 "#,
@@ -148,12 +148,12 @@ echo '{"webpage_url":"https://example.com/single","title":"X"}'
         entries.is_empty(),
         "single entry whose url matches input → empty vec"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn expand_playlist_nonzero_exit_is_error() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "extractor failed" >&2
 exit 1
@@ -168,12 +168,12 @@ exit 1
     } else {
         panic!("wrong error variant");
     }
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn expand_playlist_malformed_json_is_error() {
-    let (_tmp, bin) = write_fake("#!/bin/sh\necho 'this is not json'\n");
+    let (tmp, bin) = write_fake("#!/bin/sh\necho 'this is not json'\n");
     let err = expand_playlist(&bin, "https://example.com/x", None, None, None)
         .await
         .expect_err("malformed JSON must fail");
@@ -181,7 +181,7 @@ async fn expand_playlist_malformed_json_is_error() {
         matches!(err, BridgeError::Json(_)),
         "expected BridgeError::Json (got {err:?})"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -197,7 +197,7 @@ async fn expand_playlist_single_video_with_both_url_fields_returns_empty_vec() {
 echo '{{"_type":"url","ie_key":"Youtube","id":"fryat2XxbWc","url":"{url}","webpage_url":"{url}","title":"Sample","duration":180}}'
 "#
     );
-    let (_tmp, bin) = write_fake(&script);
+    let (tmp, bin) = write_fake(&script);
     let entries = expand_playlist(&bin, url, None, None, None)
         .await
         .expect("both-fields single-video JSON must deserialize cleanly");
@@ -205,12 +205,12 @@ echo '{{"_type":"url","ie_key":"Youtube","id":"fryat2XxbWc","url":"{url}","webpa
         entries.is_empty(),
         "single video matching input URL → empty vec (single-video signal)"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn expand_playlist_skips_blank_lines() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo '{"webpage_url":"https://example.com/p1","title":"P1"}'
 echo ''
@@ -222,7 +222,7 @@ echo ''
         .await
         .expect("expand_playlist");
     assert_eq!(entries.len(), 2);
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 // -- UC 05 ----------------------------------------------------------------
@@ -232,7 +232,7 @@ async fn expand_playlist_bot_check_stderr_yields_auth_required() {
     // The fake yt-dlp emits the canonical bot-check ERROR line and exits
     // non-zero. The bridge must classify it as `AuthRequired`, NOT a generic
     // `ExitedWithError`. This pins the matcher → typed-error contract end-to-end.
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "ERROR: [youtube] B10ECkQXQtU: Sign in to confirm you're not a bot. Use --cookies-from-browser." >&2
 exit 1
@@ -251,14 +251,14 @@ exit 1
         matches!(err, BridgeError::AuthRequired { .. }),
         "expected BridgeError::AuthRequired, got {err:?}"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 // -- UC 08 ----------------------------------------------------------------
 
 #[tokio::test]
 async fn get_thumbnail_url_returns_stdout_trimmed() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "  https://i.ytimg.com/vi/abc/maxresdefault.jpg  "
 "#,
@@ -274,12 +274,12 @@ echo "  https://i.ytimg.com/vi/abc/maxresdefault.jpg  "
     .await
     .expect("get_thumbnail_url");
     assert_eq!(url, "https://i.ytimg.com/vi/abc/maxresdefault.jpg");
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_thumbnail_url_empty_stdout_is_error() {
-    let (_tmp, bin) = write_fake("#!/bin/sh\nexit 0\n");
+    let (tmp, bin) = write_fake("#!/bin/sh\nexit 0\n");
     let err = get_thumbnail_url(
         &bin,
         "https://example.com/x",
@@ -291,12 +291,12 @@ async fn get_thumbnail_url_empty_stdout_is_error() {
     .await
     .expect_err("must fail on empty stdout");
     assert!(matches!(err, BridgeError::ExitedWithError { .. }));
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_thumbnail_url_bot_check_stderr_yields_auth_required() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser." >&2
 exit 1
@@ -316,12 +316,12 @@ exit 1
         matches!(err, BridgeError::AuthRequired { .. }),
         "expected BridgeError::AuthRequired, got {err:?}"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_thumbnail_url_timeout_is_error() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 sleep 5
 echo "https://example.com/thumb.jpg"
@@ -338,12 +338,12 @@ echo "https://example.com/thumb.jpg"
     .await
     .expect_err("timeout must fail");
     assert!(matches!(err, BridgeError::ExitedWithError { .. }));
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_thumbnail_url_forwards_cookies_and_deno_args() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
 "#,
@@ -379,13 +379,13 @@ echo "argv:$*"
         out.contains("%(thumbnail)s"),
         "argv must include --print %(thumbnail)s template token: {out}"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_thumbnail_url_forwards_url_arg() {
     // The yt-dlp invocation must place the URL after all flags.
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
 "#,
@@ -395,7 +395,7 @@ echo "argv:$*"
         .await
         .expect("get_thumbnail_url");
     assert!(out.contains(target_url), "argv must include the URL: {out}");
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 // -- UC 02 ----------------------------------------------------------------
@@ -404,7 +404,7 @@ echo "argv:$*"
 async fn get_title_cancellable_returns_title_when_not_cancelled() {
     // Happy path: when cancel is never fired, the cancellable variant
     // returns the same trimmed title as `get_title`.
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "  Cancellable Title  "
 "#,
@@ -422,7 +422,7 @@ echo "  Cancellable Title  "
     .await
     .expect("get_title_cancellable");
     assert_eq!(title, "Cancellable Title");
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -431,7 +431,7 @@ async fn get_title_cancellable_cancel_returns_cancelled_error() {
     // `terminate_with_grace` MUST escalate to SIGKILL. The cancellable
     // variant must surface `BridgeError::Cancelled` once the process is
     // reaped, regardless of whether SIGTERM or SIGKILL did the job.
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r"#!/bin/sh
 trap 'echo got_term >&2; true' TERM
 while true; do
@@ -474,7 +474,7 @@ done
         matches!(result, Err(BridgeError::Cancelled)),
         "expected BridgeError::Cancelled (got {result:?})"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -482,7 +482,7 @@ async fn get_title_cancellable_timeout_distinct_from_cancel() {
     // The cancellable variant still honours its `timeout_dur`. With a tight
     // timeout and a hanging fake (and cancel never fired), it must surface
     // `ExitedWithError`, NOT `Cancelled`.
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r"#!/bin/sh
 trap 'true' TERM
 while true; do
@@ -513,7 +513,7 @@ done
         Err(BridgeError::ExitedWithError { .. }) => {}
         other => panic!("timeout must surface as ExitedWithError, got {other:?}"),
     }
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -522,7 +522,7 @@ async fn get_title_forwards_cookies_and_deno_args() {
     // appends `--cookies-from-browser <name>` and `--js-runtimes deno:<path>`
     // to yt-dlp's argv. The fake echoes its argv into stdout where the bridge
     // would normally read the title — close enough to verify forwarding.
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 # Echo the argv so the assertion can verify the flag presence.
 echo "argv:$*"
@@ -555,7 +555,7 @@ echo "argv:$*"
         title.contains("deno:/usr/local/bin/deno"),
         "argv echo must include the resolved deno path: {title}"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 // -- UC 17 ----------------------------------------------------------------
@@ -577,12 +577,12 @@ async fn get_title_forwards_ffmpeg_location_arg_when_set() {
     // when the caller passes Some(<file>). The fake echoes argv as the
     // "title" so the assertion works on the same channel as
     // `get_title_forwards_cookies_and_deno_args`.
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
 "#,
     );
-    let (_ffmpeg_tmp, ffmpeg_file) = stage_fake_ffmpeg();
+    let (ffmpeg_tmp, ffmpeg_file) = stage_fake_ffmpeg();
     let parent = ffmpeg_file.parent().unwrap().to_path_buf();
     let title = get_title(
         &bin,
@@ -603,13 +603,13 @@ echo "argv:$*"
         "argv must include the ffmpeg parent dir ({}): {title}",
         parent.display()
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
-    drop(_ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_title_omits_ffmpeg_location_arg_when_none() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
 "#,
@@ -628,17 +628,17 @@ echo "argv:$*"
         !title.contains("--ffmpeg-location"),
         "argv must NOT include --ffmpeg-location when ffmpeg_path = None: {title}"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_title_cancellable_forwards_ffmpeg_location_arg_when_set() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
 "#,
     );
-    let (_ffmpeg_tmp, ffmpeg_file) = stage_fake_ffmpeg();
+    let (ffmpeg_tmp, ffmpeg_file) = stage_fake_ffmpeg();
     let parent = ffmpeg_file.parent().unwrap().to_path_buf();
     let cancel = Arc::new(Notify::new());
     let title = get_title_cancellable(
@@ -660,18 +660,18 @@ echo "argv:$*"
         title.contains(parent.to_str().unwrap()),
         "argv must include the ffmpeg parent dir: {title}"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
-    drop(_ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
 async fn get_thumbnail_url_forwards_ffmpeg_location_arg_when_set() {
-    let (_tmp, bin) = write_fake(
+    let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
 "#,
     );
-    let (_ffmpeg_tmp, ffmpeg_file) = stage_fake_ffmpeg();
+    let (ffmpeg_tmp, ffmpeg_file) = stage_fake_ffmpeg();
     let parent = ffmpeg_file.parent().unwrap().to_path_buf();
     let out = get_thumbnail_url(
         &bin,
@@ -691,8 +691,8 @@ echo "argv:$*"
         out.contains(parent.to_str().unwrap()),
         "argv must include the ffmpeg parent dir: {out}"
     );
-    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
-    drop(_ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
+    drop(tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -707,8 +707,8 @@ async fn expand_playlist_forwards_ffmpeg_location_arg_when_set() {
         "#!/bin/sh\necho \"$@\" > '{}'\nexit 1\n",
         argv_log.display()
     );
-    let (_tmp, bin) = write_fake(&script);
-    let (_ffmpeg_tmp, ffmpeg_file) = stage_fake_ffmpeg();
+    let (tmp, bin) = write_fake(&script);
+    let (ffmpeg_tmp, ffmpeg_file) = stage_fake_ffmpeg();
     let parent = ffmpeg_file.parent().unwrap().to_path_buf();
 
     let _ = expand_playlist(
@@ -730,7 +730,7 @@ async fn expand_playlist_forwards_ffmpeg_location_arg_when_set() {
         "argv must include the ffmpeg parent dir: {logged}"
     );
     // keep all three tempdirs alive across .await: Rust 2024 async-drop
-    drop(_tmp);
-    drop(_ffmpeg_tmp);
+    drop(tmp);
+    drop(ffmpeg_tmp);
     drop(dest);
 }

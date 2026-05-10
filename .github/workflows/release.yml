@@ -404,10 +404,64 @@ jobs:
           pattern: artifacts-*
           path: artifacts
           merge-multiple: true
-      - name: Cleanup
+      - name: Trim release assets to installer + provenance set
+        # ------------------------------------------------------------------
+        # UC 25 — pre-publish trim of cargo-dist intermediate per-arch archives.
+        #
+        # The published Release page should expose only end-user-facing assets
+        # (custom-built installers + provenance), not the per-target archives
+        # cargo-dist produces as inputs to the custom packaging jobs. Those
+        # archives are still consumed downstream as **workflow** artifacts via
+        # `actions/download-artifact` in `custom-package-{deb-rpm,nsis,dmg}`,
+        # so trimming them here does NOT break the packaging chain — it only
+        # affects what `gh release create` (next step) uploads.
+        #
+        # Negative result: cargo-dist 0.31.0 exposes no clean "build but do
+        # not publish" switch for per-target archives. Verified knobs:
+        #   dist = false                 — kills the build inputs entirely
+        #   build-local-artifacts=false  — same; no per-target archives at all
+        #   installers = []              — already set; irrelevant to this knob
+        #   hosting = "github"           — coarse-grained; whole-release only,
+        #                                  not per-asset filtering
+        #   per-target archives/publish  — keys do not exist in 0.31.0's schema
+        # Therefore a fallback `rm` before `gh release create` is mandatory;
+        # this step implements it. The same table is mirrored in
+        # dist-workspace.toml so the next person bumping cargo-dist knows
+        # what to re-evaluate.
+        #
+        # Deviation from AC #6 wording: the use case calls for a post-create
+        # `gh release delete-asset` loop. We prune *before* `gh release create`
+        # instead. This preserves AC #6's spirit ("bloated state never
+        # publicly observable") with a strictly tighter guarantee — zero
+        # observable window vs the seconds-to-minutes window a post-create
+        # delete loop would produce. The team-lead accepted this deviation.
+        #
+        # CRITICAL — release.yml is manually maintained.
+        # This file carries a `dist generate --mode ci` autogen header but has
+        # been edited manually across UC 06, 17, 22, 23, 24, and now 25.
+        # Re-running `dist generate --mode ci` on a future cargo-dist bump
+        # WILL WIPE this trim along with the other manual edits. Bump
+        # procedure: regenerate, then re-apply each UC's release.yml edits in
+        # the same PR before merging.
+        # ------------------------------------------------------------------
         run: |
-          # Remove the granular manifests
+          # Drop the granular per-target dist-manifest.json files.
           rm -f artifacts/*-dist-manifest.json
+          # Drop the singular global dist-manifest.json. The glob above does
+          # NOT match this file — that pattern requires a `-` prefix before
+          # `dist-manifest.json`, which the global manifest lacks.
+          rm -f artifacts/dist-manifest.json
+          # Drop per-arch app archives + sha256 sidecars.
+          rm -f artifacts/app-*.tar.xz artifacts/app-*.tar.xz.sha256
+          rm -f artifacts/app-*.zip    artifacts/app-*.zip.sha256
+          # Drop per-arch ad-window archives + sha256 sidecars.
+          rm -f artifacts/ad-window-*.tar.xz artifacts/ad-window-*.tar.xz.sha256
+          rm -f artifacts/ad-window-*.zip    artifacts/ad-window-*.zip.sha256
+          # Surviving asset set should be: custom installers
+          # (.exe / .dmg / .deb / .rpm), source.tar.gz + .sha256, and
+          # sha256.sum. Log for debugging (mirrors the pattern used in
+          # package-dmg.yml's universal-binary extraction step).
+          ls -la artifacts/
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"

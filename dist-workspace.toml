@@ -28,3 +28,27 @@ github-build-setup = "../../ci/dist-build-setup.yml"
 # build-local-artifacts + build-global-artifacts and before host. This is
 # the only post-build splice cargo-dist 0.31.0 exposes.
 global-artifacts-jobs = ["./package-deb-rpm", "./package-nsis", "./package-dmg"]
+
+# UC 25 — release-asset trim is implemented in release.yml's `host` job
+# (the `Trim release assets to installer + provenance set` step, formerly
+# named `Cleanup`), NOT here. Reasoning + manual-maintenance contract:
+#
+# Negative-result table for cargo-dist 0.31.0's "build but do not publish"
+# knobs (verified during UC 25 analysis — re-evaluate on the next bump):
+#
+#   dist = false                 — kills the build inputs entirely
+#   build-local-artifacts=false  — same; no per-target archives produced
+#   installers = []              — already set above; irrelevant to this knob
+#   hosting = "github"           — coarse-grained; whole-release only, not
+#                                  per-asset filtering
+#   per-target archives/publish  — keys do not exist in 0.31.0's schema
+#
+# Therefore the trim has to live in release.yml as a pre-`gh release create`
+# `rm -f` extension to the existing Cleanup step. See that step's inline
+# comment block for full rationale and the AC #6 deviation note.
+#
+# CRITICAL — release.yml is manually maintained.
+# Re-running `dist generate --mode ci` on a future cargo-dist bump WIPES the
+# UC 06 + UC 17 + UC 22 + UC 23 + UC 24 + UC 25 edits in release.yml. Bump
+# procedure: regenerate, then re-apply each UC's release.yml edits in the
+# same PR before merging.

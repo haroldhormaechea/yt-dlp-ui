@@ -34,3 +34,4 @@ Statuses:
 | 22 | [use-cases/22-fix-linux-release-build.md](use-cases/22-fix-linux-release-build.md) | Fix Linux Release build (gdk-3.0 + WebKit deps in dist-build hook) | done | 2026-05-09 |
 | 23 | [use-cases/23-fix-macos-x86_64-release-build.md](use-cases/23-fix-macos-x86_64-release-build.md) | Fix macOS x86_64 Release build (nasm for ffmpeg cross-build) | done | 2026-05-09 |
 | 24 | [use-cases/24-fix-windows-release-build.md](use-cases/24-fix-windows-release-build.md) | Fix Windows Release build (modern gpg via winget) | done | 2026-05-09 |
+| 25 | [use-cases/25-trim-release-assets-to-installers.md](use-cases/25-trim-release-assets-to-installers.md) | Trim release-pipeline assets to installers + provenance only | pending | 2026-05-10 |

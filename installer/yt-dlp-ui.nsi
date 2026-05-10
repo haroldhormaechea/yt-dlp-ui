@@ -26,6 +26,14 @@ Target x86-unicode
     !define PRODUCT_VERSION "0.0.0"
 !endif
 
+; VIProductVersion requires the strict X.X.X.X (four-integer) format that
+; Windows resource metadata expects. Pre-release tags like "0.5.1-rc.2" are
+; not valid there, so the workflow pre-processes the semver and passes the
+; sanitised four-part string via /DPRODUCT_VI_VERSION. Fallback is "0.0.0.0".
+!ifndef PRODUCT_VI_VERSION
+    !define PRODUCT_VI_VERSION "0.0.0.0"
+!endif
+
 !ifndef SOURCE_DIR
     !define SOURCE_DIR "."
 !endif
@@ -63,7 +71,7 @@ ShowUnInstDetails show
 
 !insertmacro MUI_LANGUAGE "English"
 
-VIProductVersion "${PRODUCT_VERSION}.0"
+VIProductVersion "${PRODUCT_VI_VERSION}"
 VIAddVersionKey  "ProductName"     "${PRODUCT_NAME}"
 VIAddVersionKey  "CompanyName"     "${PRODUCT_PUBLISHER}"
 VIAddVersionKey  "FileVersion"     "${PRODUCT_VERSION}"

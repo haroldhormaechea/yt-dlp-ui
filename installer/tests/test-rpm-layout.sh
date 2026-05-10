@@ -43,8 +43,9 @@ do
     fi
 done
 
-# Exec-bit / mode check via `rpm -qpv`.
-PERMS="$(rpm -qpv "${RPM}")"
+# Exec-bit / mode check via `rpm -qplv` (note: -l lists files; without -l,
+# rpm -qpv emits only package metadata and contains no file paths).
+PERMS="$(rpm -qplv "${RPM}")"
 for path in \
     /opt/yt-dlp-ui/yt-dlp-ui \
     /opt/yt-dlp-ui/ad-window \

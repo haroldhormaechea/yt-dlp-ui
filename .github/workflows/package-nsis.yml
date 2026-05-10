@@ -168,10 +168,15 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          # VIProductVersion requires X.X.X.X (four pure integers). Strip the
+          # pre-release suffix (e.g. "-rc.2") then append ".0" for the build
+          # component. "0.5.1-rc.2" → "0.5.1.0".
+          $viVersion = ($version -replace '-.*$', '') + '.0'
           $src = (Resolve-Path 'nsis-src').Path
           $bootstrap = (Resolve-Path 'MicrosoftEdgeWebview2Setup.exe').Path
           & 'C:\Program Files (x86)\NSIS\makensis.exe' `
               "/DPRODUCT_VERSION=$version" `
+              "/DPRODUCT_VI_VERSION=$viVersion" `
               "/DSOURCE_DIR=$src" `
               "/DWEBVIEW2_BOOTSTRAPPER=$bootstrap" `
               installer\yt-dlp-ui.nsi

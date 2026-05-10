@@ -17,11 +17,11 @@ use super::{APP_VERSION, entries, ffmpeg_display_version};
 use std::collections::HashSet;
 
 /// AC#1 / AC#2 — version surfacing. The workspace Cargo.toml is pinned to
-/// `0.5.1-rc.3`; `APP_VERSION` mirrors `env!("CARGO_PKG_VERSION")` and must
+/// `0.5.1-rc.4`; `APP_VERSION` mirrors `env!("CARGO_PKG_VERSION")` and must
 /// reflect that bump. A future bump updates this constant in lock-step.
 #[test]
 fn app_version_matches_cargo_pin() {
-    assert_eq!(APP_VERSION, "0.5.1-rc.3");
+    assert_eq!(APP_VERSION, "0.5.1-rc.4");
 }
 
 /// AC#3-7, AC#13 — entry name set. The bundled-software scope per UC 18 is

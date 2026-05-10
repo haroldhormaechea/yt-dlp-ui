@@ -61,6 +61,17 @@ the bundled `yt-dlp` binary.
 - yt-dlp is responsible for its own URL validation and server-response
   handling. Vulnerabilities discovered upstream are mitigated by bumping
   the pinned `YT_DLP_VERSION` in CI.
+- **UC 26 / macOS hardened-runtime narrowing:** on macOS the post-exec
+  attack surface is now narrower than on Linux/Windows. Even if a
+  hostile URL succeeded in coaxing `yt-dlp` into loading attacker-
+  controlled native code, the bundled binary runs under the project's
+  Developer ID with hardened-runtime enabled (per ADR 0011); macOS
+  AMFI rejects unsigned-executable-memory writes and library-validation
+  bypasses except where the `installer/entitlements/yt-dlp.entitlements`
+  file explicitly grants them (and that grant is scoped to the
+  PyInstaller bootloader's existing dlopen pattern, not arbitrary
+  attacker code paths). This is defense-in-depth on top of the no-shell
+  invocation, not a replacement for it.
 
 ### T2. Untrusted ad creative
 
@@ -212,8 +223,19 @@ license drift is policed by:
 
 ### T9. Unsigned binaries (Posture 3, MVP only)
 
-**Surface:** the installer artifacts on macOS and Windows are unsigned at
-MVP per the deliberate signing posture (PROJECT_BRIEF.md § Deployment).
+**UC 26 / 2026-05-10 update — macOS-only transition.** The macOS `.dmg`
+is now Posture 1 (Developer ID + hardened runtime + notarization +
+DMG-only stapling), per ADR 0011 — kernel-level
+`AppleSystemPolicy` enforcement on macOS 26.x made the unsigned posture
+a hard launch failure on arm64 hardware, not just a UX warning. T9 still
+applies to **Windows** installer artifacts; Linux distros do not warn on
+unsigned packages. The Mitigations bullets below remain accurate for the
+non-macOS surface.
+
+**Surface:** the installer artifacts on Windows are unsigned at MVP per
+the deliberate signing posture (PROJECT_BRIEF.md § Deployment). On
+macOS, see T15 for the new long-lived-secret surface introduced by
+Posture 1.
 
 **Risks:**
 - Users cannot cryptographically verify that an installer they downloaded
@@ -400,6 +422,33 @@ Mitigations applied:
   for cases where xattrs are re-applied (e.g. an end-user-modified
   install or a future signing transition).
 
+**UC 26 / 2026-05-10 — project-Developer-ID signing on macOS.** In
+addition to the fetch-time SHA-256 / GPG verification documented above
+(yt-dlp GPG + SHA, deno + ffmpeg SHA-only with in-tree pin), every
+bundled Mach-O on macOS is now also signed with the project's
+**Developer ID Application** certificate at release time as part of the
+deep-sign step in `installer/macos-signing.sh::deep_sign_app`:
+
+- `Contents/MacOS/yt-dlp-ui` (parent)
+- `Contents/MacOS/ad-window`
+- `Contents/Resources/yt-dlp`
+- `Contents/Resources/deno`
+- `Contents/Resources/ffmpeg`
+
+Two signature layers therefore protect the macOS bundled-binary surface:
+the **upstream** signature/hash verified at fetch time (build-time
+supply-chain check against upstream tampering), and the **project**
+Developer ID signature verified at exec time (runtime check that the
+binary is the one the project shipped, enforced by macOS AMFI). The
+project signature is what allows the hardened-runtime + per-binary
+entitlements posture documented in ADR 0011 to actually take effect on
+macOS 26.x. Linux + Windows are unchanged — they remain at the
+fetch-time-only verification layer until their own signing posture is
+upgraded.
+
+The new long-lived secret introduced by this signing layer (the
+Developer ID Application certificate) is its own threat surface; see T15.
+
 ### T14. Repository licensing transition (UC 20)
 
 The repo-root `LICENSE` file is now **PolyForm Noncommercial 1.0.0** —
@@ -422,6 +471,87 @@ README.md.
 **Mitigations:** none required — the licensing is explicit in repo
 files, in the artifact-bundled `yt-dlp-LICENSE.txt` shipped to end
 users, and in `crates/app/src/about.rs`'s About-modal license listing.
+
+### T15. Developer ID Application cert as a new long-lived secret (UC 26)
+
+(Numbered T15 because T14 is already in use for the UC 20 licensing
+transition. T15 is the next free integer.)
+
+**Surface:** UC 26's macOS-only Posture-1 upgrade (ADR 0011) introduces
+six GitHub Actions secrets stored at the repository level:
+
+| Secret | What it is |
+|---|---|
+| `APPLE_TEAM_ID` | 10-char Apple Developer team identifier |
+| `APP_STORE_CONNECT_API_KEY_ID` | App Store Connect API key id |
+| `APP_STORE_CONNECT_API_KEY_ISSUER_ID` | Issuer id paired with the key |
+| `APP_STORE_CONNECT_API_KEY_P8` | Base64-encoded `.p8` key file |
+| `MACOS_CERTIFICATE` | Base64-encoded `.p12` Developer ID Application cert |
+| `MACOS_CERTIFICATE_PASSWORD` | `.p12` export password |
+
+`MACOS_KEYCHAIN_PASSWORD` is **not** a stored secret — generated inline
+via `openssl rand -hex 32` per release run.
+
+**Risks:**
+- **`.p12` export disclosure.** Anyone with the cert export and its
+  password can sign Mach-Os under the project's Developer ID, indirectly
+  attesting to malicious code as project-built. macOS users would have
+  no easy way to tell a malicious signed binary from a legitimate one
+  short of comparing cdhash against a trusted release.
+- **App Store Connect API key (`.p8`) disclosure.** Combined with the
+  key id and issuer id, an attacker could submit malicious binaries to
+  Apple's notary service under the project's identity, producing a
+  notarization ticket that a victim's macOS would accept.
+- **Cert expiry mid-release-cycle.** Apple Developer ID Application
+  certs expire every 5 years. Forgetting to rotate ahead of expiry
+  silently breaks future releases (codesign starts failing, CI fails
+  loudly — but the failure is at release time, not at PR time, so it
+  surfaces late).
+
+**Mitigations:**
+
+*Storage and access:*
+- Secrets live in **GitHub Actions repository secrets only**. Never
+  printed to logs (the workflow uses `if: env.MACOS_CERTIFICATE != ''`
+  for gating, never `echo "$MACOS_CERTIFICATE"`).
+- The temp keychain and decoded `.p8` file are removed in the
+  always-trailer cleanup step, so a runner reuse cannot leak them.
+- The keychain password is per-job (inline `openssl rand -hex 32`),
+  not a stored secret — there is no long-lived keychain password to
+  rotate.
+
+*Rotation cadence:*
+- **Every 5 years** (cert expiry). Procedure: regenerate cert via
+  developer.apple.com, export to fresh `.p12`, base64-encode, update
+  `MACOS_CERTIFICATE` + `MACOS_CERTIFICATE_PASSWORD` GHA secrets,
+  re-tag a candidate release to confirm the new cert signs and
+  notarizes cleanly. Full procedure in
+  [ADR 0011 § Cert rotation cadence and compromise response](docs/adr/0011-macos-signing-and-notarization.md#cert-rotation-cadence-and-compromise-response).
+
+*Compromise response:*
+1. **Revoke the cert immediately** in developer.apple.com →
+   Certificates. Apple's revocation lists propagate to Gatekeeper
+   within hours.
+2. **Rotate `MACOS_CERTIFICATE` + `MACOS_CERTIFICATE_PASSWORD`** to a
+   freshly issued cert.
+3. **Cut a fresh release tag** with the new cert. Update GitHub
+   Release notes for any affected previous tags pointing users at the
+   new build.
+4. **Audit GHA workflow run logs** around the leak window for
+   evidence of secret exfiltration; rotate any other secrets with the
+   same exposure (the App Store Connect API key's `.p8` lives in the
+   same secret store).
+5. Existing already-downloaded artifacts stamped with the revoked
+   cert may continue to work for users who validated them before
+   revocation propagated; new downloads of the same artifact will
+   fail Gatekeeper.
+
+**Out of scope:** an attacker who compromises a maintainer's Apple
+Developer Program account directly (via Apple-ID phishing, Apple-ID
+session hijack, etc.) can rotate certs and re-issue API keys at will;
+that's an Apple-account-security boundary, not something the project
+infrastructure can defend against. Mitigated by enabling Apple's
+two-factor auth on the Developer Program account.
 
 ## What this document does NOT cover
 

@@ -154,6 +154,21 @@ just deny
 CI runs the same set on every PR plus `cargo test` on macOS / Windows /
 Linux runners.
 
+### macOS release-pipeline note (UC 26)
+
+PR builds — including PRs from forks — produce an **unsigned** `.dmg`
+by GitHub Actions design: forks do not inherit org-level secrets, so
+`env.MACOS_CERTIFICATE` is empty in those runs and the
+`.github/workflows/package-dmg.yml` signing / notarization / stapling
+steps short-circuit cleanly. The unsigned PR-build `.dmg` is fine for
+structural smoke (extract layout, lipo arches, file presence) but will
+not launch on macOS 26.x arm64 — that's the UC 26 bug, not a CI defect.
+Only tagged release builds on `master` (with the six secrets
+provisioned per [README.md § macOS release prerequisites](README.md#macos-release-prerequisites))
+produce a signed-and-notarized `.dmg`. The signing posture, secret
+inventory, and cert-rotation cadence live in
+[ADR 0011](docs/adr/0011-macos-signing-and-notarization.md).
+
 ## Where things go
 
 | If you're adding... | Put it in... |

@@ -285,6 +285,8 @@ years from issuance. Rotation procedure:
   signed on macOS, unsigned elsewhere")
 - THREATS.md § T13 (bundled binaries now project-Developer-ID-signed
   in addition to the existing fetch-time SHA-256 / GPG verification)
-- THREATS.md § T14 (the new long-lived secret: the Developer ID cert)
+- THREATS.md § T15 (the new long-lived secret: the Developer ID cert
+  — numbered T15 because T14 was already in use for the UC 20
+  licensing transition)
 - PROJECT_BRIEF.md § Deployment § Code signing (records the macOS-only
   Posture-3 → Posture-1 upgrade)

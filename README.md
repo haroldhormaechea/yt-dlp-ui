@@ -99,11 +99,71 @@ yt-dlp-ui/
 └── use-cases/            individual use case files indexed by USE_CASES.md
 ```
 
+## macOS release prerequisites
+
+Cutting a macOS release requires Apple Developer ID credentials wired
+into GitHub Actions. UC 26 traced a hard launch failure on macOS 26.x
+arm64 to the unsigned-binary posture (the kernel's
+`AppleSystemPolicy` denies exec at dyld-startup, independent of any
+Gatekeeper "open anyway" override the user grants); the macOS-only fix
+is full Posture-1 signing + notarization. Linux + Windows release
+posture is unchanged. The full design rationale lives in
+[ADR 0011](docs/adr/0011-macos-signing-and-notarization.md).
+
+**One-time setup (project owner):**
+
+- Active membership in the **Apple Developer Program** (~$99/year).
+  Lapsing the membership invalidates the Developer ID cert and breaks
+  future macOS releases until renewed.
+- A **Developer ID Application** certificate exported as a `.p12`
+  (Keychain Access → right-click → Export → `.p12`).
+- An **App Store Connect API key** (`.p8`) with the
+  *Developer ID notary service* role.
+
+**Six GHA repository secrets** (the inventory; mirrored in ADR 0011 and
+in `.github/workflows/package-dmg.yml`):
+
+| Secret | What it is |
+|---|---|
+| `APPLE_TEAM_ID` | 10-char Apple Developer team identifier |
+| `APP_STORE_CONNECT_API_KEY_ID` | App Store Connect API key id |
+| `APP_STORE_CONNECT_API_KEY_ISSUER_ID` | Issuer id paired with the key |
+| `APP_STORE_CONNECT_API_KEY_P8` | Base64-encoded `.p8` key file |
+| `MACOS_CERTIFICATE` | Base64-encoded `.p12` Developer ID Application cert |
+| `MACOS_CERTIFICATE_PASSWORD` | `.p12` export password |
+
+`MACOS_KEYCHAIN_PASSWORD` is **not** a stored secret — the temporary
+keychain's password is generated inline via `openssl rand -hex 32` for
+each release run and lives only as long as the GHA job. `APPLE_ID_USERNAME`
+is also not used — `notarytool` API-key auth is preferred.
+
+PR-from-fork builds and master builds run before the secrets are
+provisioned see empty values and skip the entire signing block,
+producing the same unsigned `.dmg` the pre-UC-26 pipeline produced.
+
+**Cert rotation cadence.** Apple Developer ID Application certs expire
+every 5 years from issuance. The full rotation procedure and
+compromise-response checklist live in [ADR 0011 § Cert rotation
+cadence and compromise response](docs/adr/0011-macos-signing-and-notarization.md#cert-rotation-cadence-and-compromise-response).
+
+**Day-to-day macOS development does NOT involve signing.** `cargo run`
+(or `just run`) is the primary dev flow — the dev workflow does not
+touch codesign at all. The opt-in helper for the rare maintainer flow
+of "deep-sign and verify a locally built `.app` before tagging" is
+[`scripts/macos-signing-local.sh`](scripts/macos-signing-local.sh) (run
+without args for usage; macOS-only, no-op elsewhere).
+
+**Bundle structure verification.** A QA-owned macOS bundle-structure
+verifier (`scripts/macos-verify-bundle.sh`) is on the testing roadmap
+for UC 26; once it lands it runs `codesign --verify --deep --strict`
++ `spctl --assess` + `stapler validate` against a freshly built `.dmg`
+as part of the release acceptance checklist.
+
 ## Known limitations
 
 - **Pre-implementation scaffold.** No UI exists yet; the three crates are stubs that compile and log. The download queue, ad-window IPC, settings, and SQLite schema are designed (see `PROJECT_BRIEF.md` § Architecture and `docs/adr/`) but not built.
 - **No release has been cut yet.** `cargo-dist` (`dist` CLI, v0.31.0) is initialized — `dist-workspace.toml`, `[profile.dist]`, and `.github/workflows/release.yml` are committed. Upstream's reusable release workflow was renamed to `.github/workflows/release-upstream.yml` to free the path; its callers (`release-master.yml`, `release-nightly.yml`) were updated. Cutting a release requires a git tag matching the dist contract; no tag exists yet. **UC 06 wired the four native installer formats** (.dmg, NSIS .exe, .deb, .rpm) via cargo-dist's `global-artifacts-jobs` splice + per-format packagers (nfpm, makensis, hdiutil); both `yt-dlp` and `deno` are bundled inside each artifact. `.snap` remains a separate workflow gap (`snapcore/action-build` + `snapcore/action-publish`); cargo-dist does not generate snap artifacts.
-- **Binaries are unsigned.** Posture decision for the MVP. macOS Gatekeeper and Windows SmartScreen will warn users on first launch — right-click → Open on macOS, "More info → Run anyway" on Windows. Re-evaluate signing (~$220–500/yr) once the project demonstrates real-world demand. **macOS quarantine note (UC 17):** the `.dmg` build runs `xattr -cr` on the staged `.app` before packaging, and the app strips `com.apple.quarantine` again at startup, so Gatekeeper prompts only once — not separately for yt-dlp, ffmpeg, and deno.
+- **Binaries are unsigned on Linux + Windows.** Posture decision for the MVP on those OSes. Windows SmartScreen will warn users on first launch — "More info → Run anyway". Linux distros do not warn. Re-evaluate Windows signing (~$199–699/yr) once the project demonstrates real-world demand. **macOS upgraded to Posture 1 (UC 26):** Developer ID + hardened runtime + notarization + DMG-only stapling. See *macOS release prerequisites* above and ADR 0011 for the full picture. **macOS quarantine note (UC 17):** the `.dmg` build runs `xattr -cr` on the staged `.app` before packaging, and the app strips `com.apple.quarantine` again at startup, so Gatekeeper prompts only once — not separately for yt-dlp, ffmpeg, and deno.
 - **Ad SDK and vendor are not selected.** The `ad-window` crate is a stub; integrating a real third-party ad-network SDK is deferred until a vendor is chosen. Telemetry implications and the first-launch consent disclosure depend on that choice.
 - **No automated UI tests.** MVP relies on a smoke-binary CI test (the binary boots and DB migrations succeed) plus manual per-OS smoke checks. True UI automation is deferred to production maturity.
 - **Coverage target is aspirational.** 60% at MVP, 80% at production; not yet enforced because there is no code to cover.

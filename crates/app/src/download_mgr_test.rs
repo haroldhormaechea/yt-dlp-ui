@@ -1446,7 +1446,16 @@ async fn multi_row_batching_picks_apply_to_all_rows_atomically() {
     for _ in 0..3 {
         env.bridge.release_one();
     }
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Poll deterministically for the 3 retry start_download calls. A fixed
+    // sleep (e.g. 300 ms) is flaky on slow Windows GHA runners — the retry
+    // spawn → start_download dispatch can race past the assertion window.
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let b = env.bridge.behavior.lock().await;
+        if b.download_calls >= 6 {
+            break;
+        }
+    }
 
     let b = env.bridge.behavior.lock().await;
     assert_eq!(

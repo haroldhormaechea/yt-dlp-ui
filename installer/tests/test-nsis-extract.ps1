@@ -27,7 +27,27 @@ if (-not $sevenZip) {
     exit 70
 }
 
-$listing = & 7z l $InstallerExe 2>&1 | Out-String
+# Use 7z's structured long-format listing (-slt) instead of the human-
+# readable table. -slt emits "Path = ..." / "Size = ..." records per file,
+# which is robust against NSIS prefixing entries with $PLUGINSDIR\, mixing
+# slashes, or tab-padding columns. The default `7z l` output failed to
+# capture sizes for entries like `yt-dlp` / `deno` because the regex didn't
+# tolerate the actual column layout produced by NSIS archives.
+$slt = & 7z l -slt $InstallerExe 2>&1 | Out-String
+
+$sizes = @{}
+$currentPath = $null
+foreach ($line in ($slt -split "`r?`n")) {
+    if ($line -match '^Path = (.+)$') {
+        $currentPath = $Matches[1].Trim()
+    } elseif ($line -match '^Size = (\d+)\s*$' -and $null -ne $currentPath) {
+        # Key the dictionary by basename — NSIS paths may carry a $PLUGINSDIR
+        # prefix or use forward/back slashes. Split-Path -Leaf normalises both.
+        $leaf = Split-Path -Leaf $currentPath
+        $sizes[$leaf] = [int64]$Matches[1]
+        $currentPath = $null
+    }
+}
 
 $expected = @(
     'yt-dlp-ui.exe',
@@ -41,7 +61,7 @@ $expected = @(
 
 $failures = 0
 foreach ($name in $expected) {
-    if ($listing -match [regex]::Escape($name)) {
+    if ($sizes.ContainsKey($name)) {
         Write-Host "ok: $name present in installer"
     } else {
         Write-Host "FAIL: $name missing from installer"
@@ -50,12 +70,6 @@ foreach ($name in $expected) {
 }
 
 # Sanity size checks (yt-dlp > 5 MB, deno > 30 MB; loose lower bounds).
-$sizes = @{}
-foreach ($line in ($listing -split "`n")) {
-    if ($line -match '^\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+(\d+)\s+\d*\s+(\S+)$') {
-        $sizes[$Matches[2]] = [int64]$Matches[1]
-    }
-}
 function Test-MinSize {
     param([string] $Name, [int64] $Min)
     if ($sizes.ContainsKey($Name) -and $sizes[$Name] -ge $Min) {

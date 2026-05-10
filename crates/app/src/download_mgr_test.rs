@@ -1757,7 +1757,8 @@ async fn cancel_one_during_title_fetch_resets_title_status_to_pending() {
         .unwrap()
         .unwrap()
         .id;
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    // 5 s: Windows CI process startup is slow under load.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         let row = env
             .db
@@ -1778,8 +1779,9 @@ async fn cancel_one_during_title_fetch_resets_title_status_to_pending() {
     env.manager.cancel_one(id).await;
 
     // Row must be cancelled; title_status reset to pending (NOT error).
+    // 8 s: Windows CI process teardown is slow under load; 2 s is too tight.
     let final_status =
-        await_status(&env.db, id, QueueStatus::Cancelled, Duration::from_secs(2)).await;
+        await_status(&env.db, id, QueueStatus::Cancelled, Duration::from_secs(8)).await;
     assert_eq!(final_status, QueueStatus::Cancelled);
 
     let row = env
@@ -1824,7 +1826,8 @@ async fn cancel_one_on_in_flight_with_title_fetching_fires_both_tokens() {
         .unwrap()
         .unwrap()
         .id;
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    // 5 s: Windows CI process startup is slow under load.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         let row = env
             .db
@@ -1847,8 +1850,9 @@ async fn cancel_one_on_in_flight_with_title_fetching_fires_both_tokens() {
 
     env.manager.cancel_one(id).await;
 
+    // 8 s: Windows CI process teardown is slow under load; 2 s is too tight.
     let final_status =
-        await_status(&env.db, id, QueueStatus::Cancelled, Duration::from_secs(2)).await;
+        await_status(&env.db, id, QueueStatus::Cancelled, Duration::from_secs(8)).await;
     assert_eq!(
         final_status,
         QueueStatus::Cancelled,

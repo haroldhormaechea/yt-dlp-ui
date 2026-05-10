@@ -672,6 +672,7 @@ async fn expand_playlist_forwards_ffmpeg_location_arg_when_set() {
     // expand_playlist's stdout is consumed as JSON, so we cannot echo argv
     // there. Use a sidecar file instead (same pattern as
     // `cookies_and_js_runtime_args_reach_yt_dlp` in download_fake_binary.rs).
+    // dest kept alive via drop below — argv.log lives in this tempdir.
     let dest = tempfile::tempdir().unwrap();
     let argv_log = dest.path().join("argv.log");
     let script = format!(
@@ -700,4 +701,5 @@ async fn expand_playlist_forwards_ffmpeg_location_arg_when_set() {
         logged.contains(parent.to_str().unwrap()),
         "argv must include the ffmpeg parent dir: {logged}"
     );
+    drop(dest); // explicit keep-alive: dest must outlive the await so read_to_string sees argv.log
 }

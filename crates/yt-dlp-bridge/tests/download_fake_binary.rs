@@ -228,6 +228,7 @@ async fn cookies_and_js_runtime_args_reach_yt_dlp() {
     // the bridge's bot-check matcher would treat any "--cookies-from-browser"
     // token in stderr as AuthRequired. Instead, the fake writes argv to a
     // sidecar file and exits 1 with empty stderr; the test reads the file.
+    // dest kept alive via drop below — argv.log lives in this tempdir.
     let dest = tempfile::tempdir().unwrap();
     let argv_log = dest.path().join("argv.log");
     let script = format!(
@@ -271,6 +272,7 @@ async fn cookies_and_js_runtime_args_reach_yt_dlp() {
         logged.contains("deno:/opt/deno"),
         "argv must include deno:<path> token: {logged}"
     );
+    drop(dest); // explicit keep-alive: dest must outlive the await so read_to_string sees argv.log
 }
 
 // -- UC 02: two-stage cancel ---------------------------------------------
@@ -470,6 +472,7 @@ async fn ffmpeg_location_arg_reaches_yt_dlp_when_set() {
     // supervisor must append `--ffmpeg-location <parent_dir>` to argv. The
     // directory form (parent of the binary) is intentional: a future ffprobe
     // dropped next to ffmpeg gets picked up without an argv-builder change.
+    // dest kept alive via drop below — argv.log lives in this tempdir.
     let dest = tempfile::tempdir().unwrap();
     let argv_log = dest.path().join("argv.log");
     let script = format!(
@@ -516,6 +519,7 @@ async fn ffmpeg_location_arg_reaches_yt_dlp_when_set() {
         !logged.contains(&flag_token),
         "argv must use directory form, not file form: {logged}"
     );
+    drop(dest); // explicit keep-alive: dest must outlive the await so read_to_string sees argv.log
 }
 
 #[tokio::test]
@@ -524,6 +528,7 @@ async fn ffmpeg_location_arg_absent_when_path_none() {
     // --ffmpeg-location flag is appended. yt-dlp falls back to its own
     // PATH lookup (production code refuses to spawn in that case via
     // download_mgr's ffmpeg gate, so this is mostly a defensive guard).
+    // dest kept alive via drop below — argv.log lives in this tempdir.
     let dest = tempfile::tempdir().unwrap();
     let argv_log = dest.path().join("argv.log");
     let script = format!(
@@ -551,4 +556,5 @@ async fn ffmpeg_location_arg_absent_when_path_none() {
         !logged.contains("--ffmpeg-location"),
         "argv must NOT include --ffmpeg-location when ffmpeg_path is None: {logged}"
     );
+    drop(dest); // explicit keep-alive: dest must outlive the await so read_to_string sees argv.log
 }

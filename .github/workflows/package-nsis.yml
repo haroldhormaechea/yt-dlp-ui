@@ -134,11 +134,29 @@ jobs:
         run: |
           $src = 'nsis-src'
           New-Item -ItemType Directory -Force -Path $src | Out-Null
-          # Extract the dist-built .zip archives.
-          Expand-Archive -LiteralPath 'target/distrib/app-x86_64-pc-windows-msvc.zip' -DestinationPath 'target/distrib/' -Force
-          Expand-Archive -LiteralPath 'target/distrib/ad-window-x86_64-pc-windows-msvc.zip' -DestinationPath 'target/distrib/' -Force
-          Copy-Item 'target/distrib/app-x86_64-pc-windows-msvc/app.exe'           "$src/yt-dlp-ui.exe"
-          Copy-Item 'target/distrib/ad-window-x86_64-pc-windows-msvc/ad-window.exe' "$src/ad-window.exe"
+          # Extract each dist-built .zip into its own temp dir under
+          # $env:RUNNER_TEMP, then locate the binary via -Recurse. This is
+          # robust against the cargo-dist Windows zip layout (which differs
+          # from tar's and may flatten or nest depending on dist version).
+          # Separate temp dirs avoid filename-collision risk between archives.
+          $appExtract = Join-Path $env:RUNNER_TEMP 'nsis-app-extract'
+          $adwExtract = Join-Path $env:RUNNER_TEMP 'nsis-adwindow-extract'
+          New-Item -ItemType Directory -Force -Path $appExtract | Out-Null
+          New-Item -ItemType Directory -Force -Path $adwExtract | Out-Null
+          Expand-Archive -LiteralPath 'target/distrib/app-x86_64-pc-windows-msvc.zip'       -DestinationPath $appExtract -Force
+          Expand-Archive -LiteralPath 'target/distrib/ad-window-x86_64-pc-windows-msvc.zip' -DestinationPath $adwExtract -Force
+
+          $appBinary = Get-ChildItem -LiteralPath $appExtract -Recurse -Filter 'app.exe' | Select-Object -First 1
+          if ($null -eq $appBinary) {
+              throw "Could not locate app.exe inside app-x86_64-pc-windows-msvc.zip (extracted to $appExtract)"
+          }
+          $adwBinary = Get-ChildItem -LiteralPath $adwExtract -Recurse -Filter 'ad-window.exe' | Select-Object -First 1
+          if ($null -eq $adwBinary) {
+              throw "Could not locate ad-window.exe inside ad-window-x86_64-pc-windows-msvc.zip (extracted to $adwExtract)"
+          }
+
+          Copy-Item -LiteralPath $appBinary.FullName "$src/yt-dlp-ui.exe"
+          Copy-Item -LiteralPath $adwBinary.FullName "$src/ad-window.exe"
           Copy-Item 'runtime-deps/yt-dlp' "$src/yt-dlp"
           Copy-Item 'runtime-deps/deno'   "$src/deno"
           Copy-Item 'runtime-deps/ffmpeg' "$src/ffmpeg"

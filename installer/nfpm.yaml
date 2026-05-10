@@ -56,12 +56,11 @@ contents:
   - src: installer/yt-dlp-LICENSE.txt
     dst: /usr/share/doc/yt-dlp-ui/yt-dlp-LICENSE.txt
 
-deb:
-  depends:
-    - libwebkit2gtk-4.1-0
-    - libsoup-3.0-0
-
 overrides:
+  deb:
+    depends:
+      - libwebkit2gtk-4.1-0
+      - libsoup-3.0-0
   rpm:
     depends:
       - webkit2gtk4.1

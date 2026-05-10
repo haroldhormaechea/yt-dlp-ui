@@ -22,3 +22,6 @@ commands:
   - mkdir
   - find
   - which
+  - nfpm
+  - shellcheck
+  - actionlint

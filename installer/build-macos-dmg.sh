@@ -62,13 +62,11 @@ lipo -create -output "${MACOS_DIR}/ad-window" \
     "${AARCH64_BIN_DIR}/ad-window" \
     "${X86_64_BIN_DIR}/ad-window"
 
-# yt-dlp_macos upstream is universal2 — lipo-merging two identical inputs is
-# benign (output equals input). Documented inline so a future maintainer
-# doesn't try to "optimize" the duplicate fetch away.
-echo "lipo-merging yt-dlp (universal2 inputs)"
-lipo -create -output "${RES_DIR}/yt-dlp" \
-    "${AARCH64_DEPS_DIR}/yt-dlp" \
-    "${X86_64_DEPS_DIR}/yt-dlp"
+# yt-dlp_macos is a single upstream binary that scripts/fetch-yt-dlp.sh
+# maps to both aarch64 and x86_64 targets, so the two per-arch paths are
+# byte-identical. lipo rejects duplicate-arch inputs, so just copy one.
+echo "copying yt-dlp (single upstream binary, no lipo merge needed)"
+cp "${AARCH64_DEPS_DIR}/yt-dlp" "${RES_DIR}/yt-dlp"
 
 echo "lipo-merging deno (per-arch inputs)"
 lipo -create -output "${RES_DIR}/deno" \

@@ -45,6 +45,7 @@ echo "  My Test Title  "
     .await
     .expect("get_title");
     assert_eq!(title, "My Test Title");
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -61,6 +62,7 @@ async fn get_title_empty_stdout_is_error() {
     .await
     .expect_err("must fail on empty stdout");
     assert!(matches!(err, BridgeError::ExitedWithError { .. }));
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -87,6 +89,7 @@ exit 1
     } else {
         panic!("wrong error variant");
     }
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -108,6 +111,7 @@ echo "title"
     .await
     .expect_err("timeout must fail");
     assert!(matches!(err, BridgeError::ExitedWithError { .. }));
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -126,6 +130,7 @@ echo '{"webpage_url":"https://example.com/p3","title":null}'
     assert_eq!(entries[0].url, "https://example.com/p1");
     assert_eq!(entries[0].title.as_deref(), Some("P1"));
     assert_eq!(entries[2].title, None, "null title deserializes to None");
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -143,6 +148,7 @@ echo '{"webpage_url":"https://example.com/single","title":"X"}'
         entries.is_empty(),
         "single entry whose url matches input → empty vec"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -162,6 +168,7 @@ exit 1
     } else {
         panic!("wrong error variant");
     }
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -174,6 +181,7 @@ async fn expand_playlist_malformed_json_is_error() {
         matches!(err, BridgeError::Json(_)),
         "expected BridgeError::Json (got {err:?})"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -197,6 +205,7 @@ echo '{{"_type":"url","ie_key":"Youtube","id":"fryat2XxbWc","url":"{url}","webpa
         entries.is_empty(),
         "single video matching input URL → empty vec (single-video signal)"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -213,6 +222,7 @@ echo ''
         .await
         .expect("expand_playlist");
     assert_eq!(entries.len(), 2);
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 // -- UC 05 ----------------------------------------------------------------
@@ -241,6 +251,7 @@ exit 1
         matches!(err, BridgeError::AuthRequired { .. }),
         "expected BridgeError::AuthRequired, got {err:?}"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 // -- UC 08 ----------------------------------------------------------------
@@ -263,6 +274,7 @@ echo "  https://i.ytimg.com/vi/abc/maxresdefault.jpg  "
     .await
     .expect("get_thumbnail_url");
     assert_eq!(url, "https://i.ytimg.com/vi/abc/maxresdefault.jpg");
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -279,6 +291,7 @@ async fn get_thumbnail_url_empty_stdout_is_error() {
     .await
     .expect_err("must fail on empty stdout");
     assert!(matches!(err, BridgeError::ExitedWithError { .. }));
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -303,6 +316,7 @@ exit 1
         matches!(err, BridgeError::AuthRequired { .. }),
         "expected BridgeError::AuthRequired, got {err:?}"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -324,6 +338,7 @@ echo "https://example.com/thumb.jpg"
     .await
     .expect_err("timeout must fail");
     assert!(matches!(err, BridgeError::ExitedWithError { .. }));
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -364,6 +379,7 @@ echo "argv:$*"
         out.contains("%(thumbnail)s"),
         "argv must include --print %(thumbnail)s template token: {out}"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -379,6 +395,7 @@ echo "argv:$*"
         .await
         .expect("get_thumbnail_url");
     assert!(out.contains(target_url), "argv must include the URL: {out}");
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 // -- UC 02 ----------------------------------------------------------------
@@ -405,6 +422,7 @@ echo "  Cancellable Title  "
     .await
     .expect("get_title_cancellable");
     assert_eq!(title, "Cancellable Title");
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -456,6 +474,7 @@ done
         matches!(result, Err(BridgeError::Cancelled)),
         "expected BridgeError::Cancelled (got {result:?})"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -494,6 +513,7 @@ done
         Err(BridgeError::ExitedWithError { .. }) => {}
         other => panic!("timeout must surface as ExitedWithError, got {other:?}"),
     }
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -535,6 +555,7 @@ echo "argv:$*"
         title.contains("deno:/usr/local/bin/deno"),
         "argv echo must include the resolved deno path: {title}"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 // -- UC 17 ----------------------------------------------------------------
@@ -582,6 +603,8 @@ echo "argv:$*"
         "argv must include the ffmpeg parent dir ({}): {title}",
         parent.display()
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(_ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -605,6 +628,7 @@ echo "argv:$*"
         !title.contains("--ffmpeg-location"),
         "argv must NOT include --ffmpeg-location when ffmpeg_path = None: {title}"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -636,6 +660,8 @@ echo "argv:$*"
         title.contains(parent.to_str().unwrap()),
         "argv must include the ffmpeg parent dir: {title}"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(_ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -665,6 +691,8 @@ echo "argv:$*"
         out.contains(parent.to_str().unwrap()),
         "argv must include the ffmpeg parent dir: {out}"
     );
+    drop(_tmp); // keep fake yt-dlp alive across .await: Rust 2024 async-drop
+    drop(_ffmpeg_tmp); // keep fake ffmpeg alive across .await: Rust 2024 async-drop
 }
 
 #[tokio::test]
@@ -701,5 +729,8 @@ async fn expand_playlist_forwards_ffmpeg_location_arg_when_set() {
         logged.contains(parent.to_str().unwrap()),
         "argv must include the ffmpeg parent dir: {logged}"
     );
-    drop(dest); // explicit keep-alive: dest must outlive the await so read_to_string sees argv.log
+    // keep all three tempdirs alive across .await: Rust 2024 async-drop
+    drop(_tmp);
+    drop(_ffmpeg_tmp);
+    drop(dest);
 }

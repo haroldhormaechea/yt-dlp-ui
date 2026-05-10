@@ -29,3 +29,4 @@ fifteen minutes to write — and proportionally valuable.
 | 0004 | [Ad-window process isolation](0004-ad-window-process-isolation.md) | accepted |
 | 0005 | [yt-dlp bundling](0005-yt-dlp-bundling.md) | accepted |
 | 0006 | [Storage](0006-storage.md) | accepted |
+| 0011 | [macOS signing and notarization](0011-macos-signing-and-notarization.md) | accepted |

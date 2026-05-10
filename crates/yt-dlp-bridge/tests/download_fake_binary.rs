@@ -19,7 +19,9 @@ use yt_dlp_bridge::{BridgeError, DownloadEvent, DownloadRequest, FormatPref, sta
 // a concurrent test's brief write-FD on its own fake yt-dlp binary can be
 // inherited by another test's fork, and then exec-ing that binary while the
 // inherited FD is still open triggers "Text file busy" (ETXTBSY).
-static FAKE_BIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// tokio::sync::Mutex is used (not std::sync) to avoid the clippy
+// `await_holding_lock` lint that fires when a std MutexGuard crosses `.await`.
+static FAKE_BIN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn write_fake(script: &str) -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -44,7 +46,7 @@ fn make_request(dir: &std::path::Path) -> DownloadRequest {
 
 #[tokio::test]
 async fn happy_path_emits_started_progress_finished() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // Fake yt-dlp emits a few progress lines, the after_move filepath marker,
     // then exits 0. The progress prefix must match what the bridge expects.
     let (_tmp, bin) = write_fake(
@@ -95,7 +97,7 @@ exit 0
 
 #[tokio::test]
 async fn finished_bytes_is_none_when_total_was_na() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // UC 08: when no Progress line ever carried a known total_bytes (live
     // streams or extractors that don't expose size), Finished.bytes is None.
     let (_tmp, bin) = write_fake(
@@ -125,7 +127,7 @@ exit 0
 
 #[tokio::test]
 async fn nonzero_exit_emits_error_and_supervisor_returns_exited_with_error() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     let (_tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "fatal: nope" >&2
@@ -158,7 +160,7 @@ exit 2
 
 #[tokio::test]
 async fn cancel_mid_stream_emits_error_and_returns_cancelled() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // Fake yt-dlp keeps running until killed. The test cancels after a small
     // delay, expecting a Cancelled supervisor result.
     let (_tmp, bin) = write_fake(
@@ -206,7 +208,7 @@ exit 0
 
 #[tokio::test]
 async fn bot_check_stderr_yields_auth_required_not_exited_with_error() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // AC#1, AC#2: the supervisor must classify a yt-dlp bot-check stderr as
     // `BridgeError::AuthRequired` and NOT `ExitedWithError`. This test pins
     // that branching at the supervisor entry point.
@@ -233,7 +235,7 @@ exit 1
 
 #[tokio::test]
 async fn cookies_and_js_runtime_args_reach_yt_dlp() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // AC#13, AC#16: when DownloadRequest carries cookies_browser and
     // js_runtime_path, the supervisor must accept both fields and append
     // matching flags to yt-dlp's argv. We can't echo argv to STDERR here —
@@ -291,7 +293,7 @@ async fn cookies_and_js_runtime_args_reach_yt_dlp() {
 
 #[tokio::test]
 async fn cancel_observes_sigterm_and_exits_within_grace() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // The fake yt-dlp installs a SIGTERM trap that exits 0 immediately. The
     // bridge's two-stage cancel body must observe the SIGTERM-triggered exit
     // BEFORE the 2 s grace timer fires, surface
@@ -352,7 +354,7 @@ exit 1
 
 #[tokio::test]
 async fn cancel_escalates_to_sigkill_after_grace() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // The fake catches SIGTERM with an active no-op handler that loops
     // forever, simulating a child that ignores SIGTERM (the empty `trap ''
     // TERM` form is unreliable across POSIX shells — bash on macOS exits on
@@ -425,7 +427,7 @@ done
 
 #[tokio::test]
 async fn destination_line_emits_partial_file_path_event() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // UC 02 AC#17: the bridge must capture `[download] Destination: <path>`
     // from yt-dlp's stdout and forward it as a `PartialFilePath` event so
     // the app can persist `partial_file_path` for later Remove cleanup.
@@ -461,7 +463,7 @@ exit 0
 
 #[tokio::test]
 async fn spawn_failure_returns_spawn_error() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // Use a path that does not exist as the binary.
     let dest = tempfile::tempdir().unwrap();
     let bogus = dest.path().join("does-not-exist");
@@ -484,7 +486,7 @@ async fn spawn_failure_returns_spawn_error() {
 
 #[tokio::test]
 async fn ffmpeg_location_arg_reaches_yt_dlp_when_set() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // AC#2: when DownloadRequest carries ffmpeg_path = Some(<file>), the
     // supervisor must append `--ffmpeg-location <parent_dir>` to argv. The
     // directory form (parent of the binary) is intentional: a future ffprobe
@@ -541,7 +543,7 @@ async fn ffmpeg_location_arg_reaches_yt_dlp_when_set() {
 
 #[tokio::test]
 async fn ffmpeg_location_arg_absent_when_path_none() {
-    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
     // AC#2 inverse: when DownloadRequest.ffmpeg_path = None, no
     // --ffmpeg-location flag is appended. yt-dlp falls back to its own
     // PATH lookup (production code refuses to spawn in that case via

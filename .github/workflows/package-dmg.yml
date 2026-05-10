@@ -20,9 +20,25 @@ jobs:
     name: macOS .dmg (universal)
     runs-on: macos-latest
 
+    # UC 26: job-level env block. The six signing secrets are mapped to
+    # env vars HERE so individual steps can gate themselves with
+    # `if: env.MACOS_CERTIFICATE != ''`. GHA does NOT expose `secrets.*`
+    # in step-level `if:` conditions; promoting them to env is the
+    # documented escape hatch. PR-from-fork builds and pre-credential
+    # master builds see empty values and skip cleanly to the unsigned
+    # path. MACOS_KEYCHAIN_PASSWORD is deliberately NOT a secret — the
+    # temp keychain's password is generated inline in setup_temp_keychain
+    # via `openssl rand -hex 32` and lives only for the duration of
+    # this job.
     env:
       YT_DLP_VERSION: "2026.03.17"
       DENO_VERSION: "2.7.14"
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_KEY_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
 
     permissions:
       contents: read

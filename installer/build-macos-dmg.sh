@@ -42,6 +42,21 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INFO_PLIST_TEMPLATE="${SCRIPT_DIR}/Info.plist"
+ENTITLEMENTS_DIR="${SCRIPT_DIR}/entitlements"
+
+# UC 26: source the shared signing library on macOS so deep_sign_app /
+# assess_app are available when MACOS_SIGNING_IDENTITY is set. The
+# library is sourced unconditionally on Darwin (it has no side effects
+# on source); the actual signing is gated below on
+# $MACOS_SIGNING_IDENTITY being non-empty, so PR-from-fork CI and
+# pre-credential master builds short-circuit to the unsigned path
+# bit-for-bit. On non-Darwin hosts (developer running build-macos-dmg.sh
+# from a Linux box for some reason) we don't source — codesign is not
+# present and signing is not possible there anyway.
+if [[ "${OSTYPE:-}" == darwin* ]]; then
+    # shellcheck disable=SC1091
+    source "${SCRIPT_DIR}/macos-signing.sh"
+fi
 
 if [[ ! -f "${INFO_PLIST_TEMPLATE}" ]]; then
     echo "error: Info.plist template missing at ${INFO_PLIST_TEMPLATE}" >&2
@@ -112,6 +127,19 @@ sed "s/0\.1\.0/${VERSION}/g" "${INFO_PLIST_TEMPLATE}" > "${APP_DIR}/Contents/Inf
 echo "clearing extended attributes on ${APP_DIR}"
 xattr -cr "${APP_DIR}"
 
+# UC 26: deep-sign the .app with the Developer ID identity if one is
+# provided via $MACOS_SIGNING_IDENTITY. Empty / unset → unsigned path
+# (bit-for-bit identical to the pre-UC-26 output, which is what
+# PR-from-fork CI and pre-credential master builds need). The identity
+# is exported by the package-dmg.yml import-cert step, which itself
+# only runs when MACOS_CERTIFICATE is non-empty.
+if [[ -n "${MACOS_SIGNING_IDENTITY:-}" ]]; then
+    echo "deep-signing ${APP_DIR} with identity: ${MACOS_SIGNING_IDENTITY}"
+    deep_sign_app "${APP_DIR}" "${MACOS_SIGNING_IDENTITY}" "${ENTITLEMENTS_DIR}"
+else
+    echo "MACOS_SIGNING_IDENTITY unset — skipping deep-sign (unsigned .app)"
+fi
+
 # Build the .dmg via hdiutil (macOS-shipped, no third-party tool).
 DMG_PATH="${OUT_DIR}/yt-dlp-ui-universal.dmg"
 rm -f "${DMG_PATH}"
@@ -122,5 +150,21 @@ hdiutil create \
     -ov \
     -format UDZO \
     "${DMG_PATH}"
+
+# UC 26: codesign the .dmg itself if a signing identity is provided.
+# DMGs are not executables, so we omit --options runtime here — hardened
+# runtime is meaningless on a disk image. The .dmg signature is what
+# notarization will actually validate against, and what stapler will
+# attach the ticket to. Same gating as the deep-sign above.
+if [[ -n "${MACOS_SIGNING_IDENTITY:-}" ]]; then
+    echo "codesigning ${DMG_PATH} with identity: ${MACOS_SIGNING_IDENTITY}"
+    codesign \
+        --force \
+        --timestamp \
+        --sign "${MACOS_SIGNING_IDENTITY}" \
+        "${DMG_PATH}"
+else
+    echo "MACOS_SIGNING_IDENTITY unset — skipping .dmg codesign"
+fi
 
 echo "done: ${APP_DIR} + ${DMG_PATH}"

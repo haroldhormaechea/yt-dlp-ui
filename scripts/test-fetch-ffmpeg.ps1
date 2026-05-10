@@ -46,12 +46,15 @@ function Invoke-Case {
 
 # Helper: stage the script alongside a synthetic pins file so PSScriptRoot
 # resolves to a temp dir we control. Returns the staged script path.
+# fetch-ffmpeg.ps1 dot-sources lib-net-retry.ps1 from $PSScriptRoot, so the
+# lib must be staged alongside or the staged copy fails to load.
 function Stage-Script {
     param([string] $PinsContent)
     $tmp = New-TemporaryFile
     Remove-Item $tmp
     $tmpDir = New-Item -ItemType Directory -Path $tmp.FullName
     Copy-Item -LiteralPath $FetchScript -Destination (Join-Path $tmpDir 'fetch-ffmpeg.ps1')
+    Copy-Item -LiteralPath (Join-Path $ScriptDir 'lib-net-retry.ps1') -Destination (Join-Path $tmpDir 'lib-net-retry.ps1')
     Set-Content -LiteralPath (Join-Path $tmpDir 'runtime-deps-pins.env') -Value $PinsContent
     return [PSCustomObject]@{ Script = (Join-Path $tmpDir 'fetch-ffmpeg.ps1'); Dir = $tmpDir.FullName }
 }
@@ -75,6 +78,9 @@ Invoke-Case 'missing pins file → 75' {
     Remove-Item $tmp
     $tmpDir = New-Item -ItemType Directory -Path $tmp.FullName
     Copy-Item -LiteralPath $FetchScript -Destination (Join-Path $tmpDir 'fetch-ffmpeg.ps1')
+    # lib-net-retry.ps1 must still be present — it's dot-sourced before the
+    # pins-file check, so omitting it would mask the pins-file error.
+    Copy-Item -LiteralPath (Join-Path $ScriptDir 'lib-net-retry.ps1') -Destination (Join-Path $tmpDir 'lib-net-retry.ps1')
     & pwsh -NoProfile -File (Join-Path $tmpDir 'fetch-ffmpeg.ps1') x86_64-pc-windows-msvc (Join-Path $tmpDir 'out') 2>&1 | Out-Null
     Remove-Item -Recurse -Force -LiteralPath $tmpDir.FullName -ErrorAction SilentlyContinue
 } 75

@@ -200,6 +200,9 @@ stage_script() {
     mkdir -p "${script_dir}"
     cp "${FETCH_SCRIPT}" "${script_dir}/fetch-ffmpeg.sh"
     cp "${PINS_FILE}" "${script_dir}/runtime-deps-pins.env"
+    # fetch-ffmpeg.sh sources lib-net-retry.sh from its own SCRIPT_DIR.
+    # Stage it alongside so the staged copy can resolve the dependency.
+    cp "${SCRIPT_REPO_ROOT}/scripts/lib-net-retry.sh" "${script_dir}/lib-net-retry.sh"
     echo "${script_dir}/fetch-ffmpeg.sh"
 }
 
@@ -221,10 +224,13 @@ stage_script() {
 }
 
 @test "missing pins file → exit 75" {
-    # Stage the script WITHOUT a pins file alongside it.
+    # Stage the script WITHOUT a pins file alongside it. lib-net-retry.sh
+    # must still be present — it's sourced unconditionally before the pins
+    # check, so omitting it would mask the pins-file error.
     local script_dir="${SANDBOX}/script_dir_no_pins"
     mkdir -p "${script_dir}"
     cp "${FETCH_SCRIPT}" "${script_dir}/fetch-ffmpeg.sh"
+    cp "${SCRIPT_REPO_ROOT}/scripts/lib-net-retry.sh" "${script_dir}/lib-net-retry.sh"
     run bash "${script_dir}/fetch-ffmpeg.sh" x86_64-unknown-linux-gnu "${OUT_DIR}"
     [ "$status" -eq 75 ]
     [[ "$output" == *"pins file not found"* ]]

@@ -181,6 +181,12 @@ jobs:
               "/DWEBVIEW2_BOOTSTRAPPER=$bootstrap" `
               installer\yt-dlp-ui.nsi
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with $LASTEXITCODE" }
+          # makensis writes OutFile relative to the .nsi script directory
+          # (i.e. installer\yt-dlp-ui-installer.exe). Move it to the working
+          # directory so downstream steps (smoke-test, upload-artifact)
+          # find it at the expected location.
+          Move-Item -LiteralPath 'installer\yt-dlp-ui-installer.exe' `
+                    -Destination 'yt-dlp-ui-installer.exe' -Force
 
       - name: Smoke-test installer layout
         shell: pwsh

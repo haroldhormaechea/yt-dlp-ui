@@ -20,8 +20,12 @@
 # Universal-binary policy (locked, team-lead approved):
 #   Single .dmg lipo-merging x86_64 + aarch64. UC 01's non-technical-user
 #   audience does not know "Apple Silicon" vs "Intel" — one download.
-#   yt-dlp_macos is upstream-universal2; lipo-merging two identical inputs
-#   is benign. deno publishes per-arch; lipo produces a real fat binary.
+#   For the pinned YT_DLP_VERSION (2026.03.17), yt-dlp_macos is x86_64-only;
+#   both Apple-target fetch arms download the same asset, so we copy it once
+#   into Resources rather than lipo-merging. deno publishes per-arch; lipo
+#   produces a real fat binary there. When YT_DLP_VERSION is bumped, verify
+#   whether upstream now ships universal2 (lipo -info yt-dlp_macos); if so,
+#   the dmg builder and these comments must be re-examined.
 
 set -euo pipefail
 

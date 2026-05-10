@@ -72,7 +72,12 @@ case "${TARGET_TRIPLE}" in
         ASSET="yt-dlp_linux_aarch64"
         ;;
     x86_64-apple-darwin|aarch64-apple-darwin)
-        # Upstream's `yt-dlp_macos` is a universal2 binary covering both arches.
+        # For the pinned YT_DLP_VERSION (2026.03.17), yt-dlp_macos is x86_64-only;
+        # the same asset is downloaded for both aarch64-apple-darwin and
+        # x86_64-apple-darwin targets; the dmg builder handles the duplication by
+        # copying once. When YT_DLP_VERSION is bumped, verify whether upstream now
+        # ships universal2 (lipo -info yt-dlp_macos); if so, this script and
+        # installer/build-macos-dmg.sh must be re-examined.
         ASSET="yt-dlp_macos"
         ;;
     x86_64-pc-windows-msvc)

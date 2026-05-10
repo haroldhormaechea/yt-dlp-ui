@@ -29,6 +29,10 @@ function Get-DenoExpectedSha {
     )
 
     $content = Get-Content -Raw -LiteralPath $Path
+    if ([string]::IsNullOrEmpty($content)) {
+        [Console]::Error.WriteLine("could not parse $Path")
+        throw "could not parse $Path"
+    }
     $match = [regex]::Match($content, '[0-9A-Fa-f]{64}')
     if (-not $match.Success) {
         [Console]::Error.WriteLine("could not parse $Path")

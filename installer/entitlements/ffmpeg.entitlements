@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the bundled ffmpeg binary (Contents/Resources/ffmpeg).
+
+  Deliberately empty. ffmpeg is built statically (`--enable-static
+  --disable-shared` per ADR 0010) so there are no runtime dlopen()s into
+  non-Apple-signed dylibs, and it does not JIT. The hardened-runtime
+  defaults (no JIT, no unsigned-executable-memory, no library-validation
+  bypass) are exactly what we want here.
+
+  This file exists as a deliberate review-trail marker: an empty <dict/>
+  combined with the file's presence on disk is a positive statement that
+  ffmpeg was reviewed and found to need NO entitlements. The
+  installer/macos-signing.sh `deep_sign_app` contract treats a missing
+  per-binary file as "sign without --entitlements" and an existing file
+  (even an empty <dict/>) as "sign with --entitlements <file>". Keeping
+  this file pinned to <dict/> means a future maintainer who would
+  otherwise add disable-library-validation by reflex has to first delete
+  this file or document why. Cheap insurance against entitlements bloat.
+
+  UC 28's future ffprobe binary will follow the same convention: drop a
+  Resources/ffprobe.entitlements with an empty <dict/> alongside the
+  binary.
+-->
+<plist version="1.0">
+<dict/>
+</plist>

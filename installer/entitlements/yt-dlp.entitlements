@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the bundled yt-dlp binary (Contents/Resources/yt-dlp).
+
+  yt-dlp is built by upstream with PyInstaller, which produces a Mach-O
+  bootloader that unpacks Python and dynamically dlopen()s its bundled
+  CPython interpreter, extension modules, and library archive at runtime.
+  Two requirements follow under hardened-runtime:
+
+  - disable-library-validation: PyInstaller's bootloader dlopen()s
+    libpython and per-module .so/.dylib extensions whose Team ID does not
+    match yt-dlp's own (because they're bundled by upstream, not by us).
+    Without this entitlement, AMFI denies every such load with
+    `code-signature invalid` and the bootloader exits before reaching
+    Python's main loop. NON-NEGOTIABLE for PyInstaller-frozen apps.
+
+  - allow-unsigned-executable-memory: CPython embedded inside PyInstaller
+    occasionally JITs (regex compilation paths, ctypes thunks) and uses
+    writable+executable pages. Hardened-runtime denies W+X without this
+    entitlement.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

@@ -1,5 +1,22 @@
 # Use Case 26: Fix macOS arm64 launch failure (Dock-bounce-and-die on macOS 26.x)
 
+> **STATUS — 2026-05-10: deferred (`blocked`).** User chose to **not** invest in Developer ID + notarization at this time. Instead, the macOS 26.x launch issue will be handled by **manual user-side workaround**: end users run `xattr -dr com.apple.quarantine /Applications/yt-dlp-ui.app` after installing the .dmg, which clears the quarantine attribute that triggers `AppleSystemPolicy`'s exec-time enforcement. This avoids the $99/yr Apple Developer Program enrollment, the 6-secret rotation surface, and the recurring notarization round-trip cost — at the price of a documented user step.
+>
+> **What partially landed (WIP captured on branch `feat/uc-26-fix-macos-arm64-launch-failure` — pushed for future resurrection, never PR'd):**
+>
+> - `installer/entitlements/*.entitlements` — five per-binary entitlements files for `yt-dlp-ui`, `ad-window`, `yt-dlp` (PyInstaller), `deno` (V8), `ffmpeg` (empty-`<dict/>` review marker).
+> - `installer/macos-signing.sh` — shared bash library (`setup_temp_keychain`, `cleanup_temp_keychain`, `deep_sign_app`, `notarize_dmg`, `staple`, `assess_app`).
+> - `scripts/macos-signing-local.sh` — three-mode local-dev fallback (`cargo run` banner; ad-hoc-sign with honest macOS 26 caveat; `SIGNING_IDENTITY` env mode).
+>
+> **What did NOT land** (would be needed to actually fix the bug on macOS 26.x): `installer/build-macos-dmg.sh` integration, `installer/Info.plist` `LSMinimumSystemVersion` bump to 11.0, `.github/workflows/package-dmg.yml` workflow integration with the 6 secret names, ADR 0011, `README.md`/`CONTRIBUTING.md`/`THREATS.md`/`PROJECT_BRIEF.md` updates.
+>
+> **Resurrection procedure if/when the user changes course:** check out the captured branch, finish the remaining 7 file edits per the approved analyst proposal (preserved in the orchestrator's run log), supply the 6 GitHub Secrets, tag-push an `-rc` to validate.
+>
+> All acceptance criteria below remain unmet. The use case stays on the ledger as `blocked` until either resurrected or formally abandoned via a `revise-brief` follow-up.
+
+---
+
+
 ## Summary
 
 On macOS 26.3.1 (Apple Silicon, M-series), launching the latest GitHub-released `.dmg` produces a Dock icon that bounces briefly and then disappears, with no main window appearing. The user reproduced this both running the app directly from the mounted DMG and after copying it to `/Applications`, and in both cases explicitly granted Gatekeeper's "open anyway" override for the unsigned binary — yet the bounce-and-die persists. Because the user-override clears Gatekeeper *assessment* but not macOS 26.x's AMFI / dyld-load signature enforcement, the most likely root causes are: (a) the user downloaded the `x86_64-apple-darwin` `.dmg` from the release page and is running it on arm64 hardware without Rosetta — which produces exactly this symptom; (b) the binary is killed at dyld load by AMFI because of missing/invalid hardened-runtime + Developer ID signing on macOS 26.x; or (c) a startup crash inside `app` before window creation (panic, dyld load of a bundled framework, Info.plist mismatch, missing bundled-binary at expected path). The release pipeline does target `aarch64-apple-darwin` via cargo-dist (`dist-workspace.toml:13`), so an arm64 .dmg should be present in the latest release; if it is, the failure is signing/runtime, not asset selection. Investigation must (1) confirm which `.dmg` artifact was downloaded and that the arm64 build exists and launches, (2) collect `log show --last 5m --predicate 'process == "yt-dlp-ui"'` for the failed launch, and (3) deliver a fix covering both the install UX (so a non-technical user cannot easily grab the wrong-arch asset) and the technical launch failure on macOS 26.3.1.

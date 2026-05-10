@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the bundled deno binary (Contents/Resources/deno).
+
+  deno embeds the V8 JavaScript engine. V8 is JIT-compiling by design;
+  every script load mmap()s writable+executable pages and writes machine
+  code into them. Two entitlements are needed under hardened-runtime:
+
+  - allow-jit: permits MAP_JIT'd pages where W+X is allowed in supervised
+    bursts (the canonical V8 JIT path on Apple Silicon).
+
+  - allow-unsigned-executable-memory: a stricter superset that V8 also
+    occasionally hits on legacy code paths and on Intel hosts. Granting
+    both keeps the dual-arch universal binary working under arm64-strict
+    AMFI without needing per-arch entitlements forks.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

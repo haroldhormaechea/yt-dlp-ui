@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the parent UI binary (Contents/MacOS/yt-dlp-ui).
+
+  Defensive only. The Slint front-end and tokio runtime do not require
+  JIT today, but the surrounding ecosystem (some font shapers, future
+  Slint backends, Skia, etc.) occasionally needs allow-jit when
+  hardened-runtime is on. Granting it preempts a future surprise bounce-
+  and-die without weakening any other guarantee.
+
+  Library-validation is left ENABLED here — the parent loads only Apple-
+  signed system frameworks and crates statically linked into the binary
+  itself. There is nothing for it to dlopen from Contents/Resources/.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>

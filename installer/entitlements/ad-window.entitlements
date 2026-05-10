@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the ad-window helper (Contents/MacOS/ad-window).
+
+  ad-window embeds wry, which drives WebKit's WKWebView. WebKit needs
+  allow-jit under hardened-runtime to JIT-compile JavaScript ad creative.
+  Without it, the WebView falls back to interpreter mode which is both
+  slow and increasingly tripwire'd by macOS 26.x AMFI.
+
+  No disable-library-validation: ad-window does not load any non-Apple-
+  signed dylibs from Contents/Resources/.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+</dict>
+</plist>

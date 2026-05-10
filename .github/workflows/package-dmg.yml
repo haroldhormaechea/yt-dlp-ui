@@ -168,6 +168,23 @@ jobs:
           done
           ls -la extracted/aarch64 extracted/x86_64
 
+      # UC 26: import the Developer ID Application cert into a temp
+      # keychain so the build step's deep_sign_app call can find it.
+      # Skipped on PR-from-fork builds and on master builds before the
+      # secrets are provisioned (env.MACOS_CERTIFICATE is empty in
+      # those cases). setup_temp_keychain generates the keychain
+      # password inline (NOT a stored secret), imports the cert,
+      # extracts the codesigning CN, and exports
+      # TEMP_KEYCHAIN / TEMP_KEYCHAIN_PASSWORD / MACOS_SIGNING_IDENTITY
+      # via $GITHUB_ENV so subsequent steps see them.
+      - name: Import macOS signing cert (UC 26)
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source installer/macos-signing.sh
+          setup_temp_keychain
+
       - name: Build universal .app and .dmg
         env:
           VERSION: ${{ github.ref_name }}
@@ -175,12 +192,51 @@ jobs:
           set -euo pipefail
           export VERSION="${VERSION#v}"
           mkdir -p dist-out
+          # MACOS_SIGNING_IDENTITY is exported by Import macOS signing
+          # cert above when the cert is available; unset on
+          # unsigned-pipeline runs. build-macos-dmg.sh gates on it and
+          # short-circuits to the unsigned path if empty.
           AARCH64_BIN_DIR="$(pwd)/extracted/aarch64" \
           X86_64_BIN_DIR="$(pwd)/extracted/x86_64" \
           AARCH64_DEPS_DIR="$(pwd)/runtime-deps/aarch64" \
           X86_64_DEPS_DIR="$(pwd)/runtime-deps/x86_64" \
           OUT_DIR="$(pwd)/dist-out" \
           bash installer/build-macos-dmg.sh
+
+      # UC 26: notarize the .dmg via notarytool. Decodes the base64
+      # .p8 key into a temp file, submits with --wait, polls until
+      # accepted-or-failed verdict comes back, dumps the detailed log
+      # on non-Accepted. Gated on MACOS_CERTIFICATE so unsigned
+      # pipelines skip cleanly.
+      - name: Notarize .dmg (UC 26)
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source installer/macos-signing.sh
+          KEY_P8="${RUNNER_TEMP}/yt-dlp-ui-asc.p8"
+          # APP_STORE_CONNECT_API_KEY_P8 is base64-encoded — decode to a
+          # file notarytool can read. Mode 600 because the key is
+          # equivalent to a long-lived API credential.
+          umask 077
+          printf '%s' "${APP_STORE_CONNECT_API_KEY_P8}" | base64 --decode > "${KEY_P8}"
+          notarize_dmg \
+              "dist-out/yt-dlp-ui-universal.dmg" \
+              "${KEY_P8}" \
+              "${APP_STORE_CONNECT_API_KEY_ID}" \
+              "${APP_STORE_CONNECT_API_KEY_ISSUER_ID}"
+          rm -f "${KEY_P8}"
+
+      # UC 26: staple the notarization ticket onto the .dmg. After
+      # this, Gatekeeper validates the ticket offline at install/copy
+      # time — the user does not need network on first launch.
+      - name: Staple .dmg (UC 26)
+        if: env.MACOS_CERTIFICATE != ''
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source installer/macos-signing.sh
+          staple "dist-out/yt-dlp-ui-universal.dmg"
 
       - name: Smoke-test .dmg layout
         run: bash installer/tests/test-dmg-mount.sh dist-out/yt-dlp-ui-universal.dmg
@@ -190,3 +246,16 @@ jobs:
         with:
           name: artifacts-package-dmg
           path: dist-out/yt-dlp-ui-universal.dmg
+
+      # UC 26: always-clean the ephemeral keychain. `if: always()`
+      # ensures cleanup runs even when an earlier step failed (cert
+      # imported but codesign exploded, notarization rejected, etc.).
+      # The MACOS_CERTIFICATE gate ensures this no-ops on unsigned
+      # pipelines (no keychain was created in the first place).
+      - name: Cleanup temp keychain (UC 26)
+        if: always() && env.MACOS_CERTIFICATE != ''
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          source installer/macos-signing.sh
+          cleanup_temp_keychain

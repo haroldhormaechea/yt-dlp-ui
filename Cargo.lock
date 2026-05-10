@@ -109,7 +109,7 @@ dependencies = [
 
 [[package]]
 name = "ad-window"
-version = "0.5.1-rc.2"
+version = "0.5.1-rc.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -231,7 +231,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app"
-version = "0.5.1-rc.2"
+version = "0.5.1-rc.3"
 dependencies = [
  "assert_cmd",
  "axum",
@@ -8645,7 +8645,7 @@ dependencies = [
 
 [[package]]
 name = "yt-dlp-bridge"
-version = "0.5.1-rc.2"
+version = "0.5.1-rc.3"
 dependencies = [
  "insta",
  "nix 0.29.0",

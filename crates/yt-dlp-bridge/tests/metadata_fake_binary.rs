@@ -17,6 +17,12 @@ use yt_dlp_bridge::{
     BridgeError, expand_playlist, get_thumbnail_url, get_title, get_title_cancellable,
 };
 
+// Serialises test bodies to prevent the Linux fork+exec ETXTBSY race:
+// a concurrent test's brief write-FD on its own fake yt-dlp binary can be
+// inherited by another test's fork, and then exec-ing that binary while the
+// inherited FD is still open triggers "Text file busy" (ETXTBSY).
+static FAKE_BIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn write_fake(script: &str) -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let bin = tmp.path().join("yt-dlp");
@@ -29,6 +35,7 @@ fn write_fake(script: &str) -> (TempDir, PathBuf) {
 
 #[tokio::test]
 async fn get_title_returns_stdout_trimmed() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "  My Test Title  "
@@ -50,6 +57,7 @@ echo "  My Test Title  "
 
 #[tokio::test]
 async fn get_title_empty_stdout_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake("#!/bin/sh\nexit 0\n");
     let err = get_title(
         &bin,
@@ -67,6 +75,7 @@ async fn get_title_empty_stdout_is_error() {
 
 #[tokio::test]
 async fn get_title_nonzero_exit_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "boom" >&2
@@ -94,6 +103,7 @@ exit 1
 
 #[tokio::test]
 async fn get_title_timeout_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 sleep 5
@@ -116,6 +126,7 @@ echo "title"
 
 #[tokio::test]
 async fn expand_playlist_returns_entries() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo '{"webpage_url":"https://example.com/p1","title":"P1"}'
@@ -135,6 +146,7 @@ echo '{"webpage_url":"https://example.com/p3","title":null}'
 
 #[tokio::test]
 async fn expand_playlist_single_entry_matching_input_returns_empty_vec() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // Falls back to "single video" semantics.
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
@@ -153,6 +165,7 @@ echo '{"webpage_url":"https://example.com/single","title":"X"}'
 
 #[tokio::test]
 async fn expand_playlist_nonzero_exit_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "extractor failed" >&2
@@ -173,6 +186,7 @@ exit 1
 
 #[tokio::test]
 async fn expand_playlist_malformed_json_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake("#!/bin/sh\necho 'this is not json'\n");
     let err = expand_playlist(&bin, "https://example.com/x", None, None, None)
         .await
@@ -186,6 +200,7 @@ async fn expand_playlist_malformed_json_is_error() {
 
 #[tokio::test]
 async fn expand_playlist_single_video_with_both_url_fields_returns_empty_vec() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // Real yt-dlp single-video JSON dump shape: BOTH `url` and `webpage_url`
     // top-level fields, plus a representative subset of yt-dlp metadata.
     // Pre-fix (UC 01's `serde(alias = "webpage_url")` setup) this fails with
@@ -210,6 +225,7 @@ echo '{{"_type":"url","ie_key":"Youtube","id":"fryat2XxbWc","url":"{url}","webpa
 
 #[tokio::test]
 async fn expand_playlist_skips_blank_lines() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo '{"webpage_url":"https://example.com/p1","title":"P1"}'
@@ -229,6 +245,7 @@ echo ''
 
 #[tokio::test]
 async fn expand_playlist_bot_check_stderr_yields_auth_required() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // The fake yt-dlp emits the canonical bot-check ERROR line and exits
     // non-zero. The bridge must classify it as `AuthRequired`, NOT a generic
     // `ExitedWithError`. This pins the matcher → typed-error contract end-to-end.
@@ -258,6 +275,7 @@ exit 1
 
 #[tokio::test]
 async fn get_thumbnail_url_returns_stdout_trimmed() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "  https://i.ytimg.com/vi/abc/maxresdefault.jpg  "
@@ -279,6 +297,7 @@ echo "  https://i.ytimg.com/vi/abc/maxresdefault.jpg  "
 
 #[tokio::test]
 async fn get_thumbnail_url_empty_stdout_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake("#!/bin/sh\nexit 0\n");
     let err = get_thumbnail_url(
         &bin,
@@ -296,6 +315,7 @@ async fn get_thumbnail_url_empty_stdout_is_error() {
 
 #[tokio::test]
 async fn get_thumbnail_url_bot_check_stderr_yields_auth_required() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser." >&2
@@ -321,6 +341,7 @@ exit 1
 
 #[tokio::test]
 async fn get_thumbnail_url_timeout_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 sleep 5
@@ -343,6 +364,7 @@ echo "https://example.com/thumb.jpg"
 
 #[tokio::test]
 async fn get_thumbnail_url_forwards_cookies_and_deno_args() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
@@ -384,6 +406,7 @@ echo "argv:$*"
 
 #[tokio::test]
 async fn get_thumbnail_url_forwards_url_arg() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // The yt-dlp invocation must place the URL after all flags.
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
@@ -402,6 +425,7 @@ echo "argv:$*"
 
 #[tokio::test]
 async fn get_title_cancellable_returns_title_when_not_cancelled() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // Happy path: when cancel is never fired, the cancellable variant
     // returns the same trimmed title as `get_title`.
     let (tmp, bin) = write_fake(
@@ -427,6 +451,7 @@ echo "  Cancellable Title  "
 
 #[tokio::test]
 async fn get_title_cancellable_cancel_returns_cancelled_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // The fake hangs in a pure-shell loop with an active SIGTERM trap so
     // `terminate_with_grace` MUST escalate to SIGKILL. The cancellable
     // variant must surface `BridgeError::Cancelled` once the process is
@@ -479,6 +504,7 @@ done
 
 #[tokio::test]
 async fn get_title_cancellable_timeout_distinct_from_cancel() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // The cancellable variant still honours its `timeout_dur`. With a tight
     // timeout and a hanging fake (and cancel never fired), it must surface
     // `ExitedWithError`, NOT `Cancelled`.
@@ -518,6 +544,7 @@ done
 
 #[tokio::test]
 async fn get_title_forwards_cookies_and_deno_args() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // AC#13, AC#16: when the caller passes cookies + js_runtime, the bridge
     // appends `--cookies-from-browser <name>` and `--js-runtimes deno:<path>`
     // to yt-dlp's argv. The fake echoes its argv into stdout where the bridge
@@ -573,6 +600,7 @@ fn stage_fake_ffmpeg() -> (TempDir, std::path::PathBuf) {
 
 #[tokio::test]
 async fn get_title_forwards_ffmpeg_location_arg_when_set() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // AC#2: get_title must thread `--ffmpeg-location <parent_dir>` through
     // when the caller passes Some(<file>). The fake echoes argv as the
     // "title" so the assertion works on the same channel as
@@ -609,6 +637,7 @@ echo "argv:$*"
 
 #[tokio::test]
 async fn get_title_omits_ffmpeg_location_arg_when_none() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
@@ -633,6 +662,7 @@ echo "argv:$*"
 
 #[tokio::test]
 async fn get_title_cancellable_forwards_ffmpeg_location_arg_when_set() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
@@ -666,6 +696,7 @@ echo "argv:$*"
 
 #[tokio::test]
 async fn get_thumbnail_url_forwards_ffmpeg_location_arg_when_set() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     let (tmp, bin) = write_fake(
         r#"#!/bin/sh
 echo "argv:$*"
@@ -697,6 +728,7 @@ echo "argv:$*"
 
 #[tokio::test]
 async fn expand_playlist_forwards_ffmpeg_location_arg_when_set() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().expect("FAKE_BIN_LOCK poisoned");
     // expand_playlist's stdout is consumed as JSON, so we cannot echo argv
     // there. Use a sidecar file instead (same pattern as
     // `cookies_and_js_runtime_args_reach_yt_dlp` in download_fake_binary.rs).

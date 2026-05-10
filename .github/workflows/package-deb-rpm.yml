@@ -120,8 +120,12 @@ jobs:
           # Strip leading "v" from tag — nfpm wants pure semver.
           export VERSION="${VERSION#v}"
           mkdir -p dist-out
-          nfpm package --packager deb --config installer/nfpm.yaml --target dist-out/
-          nfpm package --packager rpm --config installer/nfpm.yaml --target dist-out/
+          # nfpm 2.40 does not expand env vars in contents.src globs; pre-process
+          # with envsubst so ${TARGET_TRIPLE}, ${VERSION}, and ${ARCH} are
+          # substituted before nfpm reads the config.
+          envsubst < installer/nfpm.yaml > installer/nfpm.expanded.yaml
+          nfpm package --packager deb --config installer/nfpm.expanded.yaml --target dist-out/
+          nfpm package --packager rpm --config installer/nfpm.expanded.yaml --target dist-out/
 
       - name: Smoke-test .deb layout
         run: |

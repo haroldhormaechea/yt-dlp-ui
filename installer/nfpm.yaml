@@ -1,6 +1,7 @@
 # nfpm config for yt-dlp-ui Linux packaging (.deb + .rpm).
 #
-# Variables resolved at packaging time by nfpm from the environment:
+# Variables substituted via `envsubst` in package-deb-rpm.yml before nfpm reads
+# this file (nfpm 2.40 does not expand env vars in contents.src paths itself):
 #   ${VERSION}        — semver string (workflow extracts from ${{ github.ref_name }} minus 'v')
 #   ${ARCH}           — amd64 | arm64 (per matrix split in package-deb-rpm.yml)
 #   ${TARGET_TRIPLE}  — Rust target triple (x86_64-unknown-linux-gnu | aarch64-unknown-linux-gnu)

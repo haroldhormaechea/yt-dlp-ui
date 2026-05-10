@@ -15,7 +15,12 @@
 ; Output: yt-dlp-ui-installer.exe in the working directory.
 
 Unicode true
-Target amd64-unicode
+; x86-unicode produces a 32-bit NSIS stub that can install 64-bit application
+; binaries without issues. The amd64-unicode stub requires additional NSIS
+; stub files that the chocolatey nsis package does not ship. If a native 64-bit
+; installer is required in future, replace choco install nsis with the official
+; NSIS installer (which bundles all stubs) and restore Target amd64-unicode.
+Target x86-unicode
 
 !ifndef PRODUCT_VERSION
     !define PRODUCT_VERSION "0.0.0"

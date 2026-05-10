@@ -2,8 +2,15 @@
 # test-nsis-extract.ps1 — installer-level smoke for the NSIS .exe produced by
 # package-nsis.yml + installer/yt-dlp-ui.nsi.
 #
-# Verifies the embedded files using 7-Zip's listing of the NSIS .exe (NSIS
-# installers are valid 7z archives at the byte level).
+# Extracts the NSIS .exe to a temp directory via 7-Zip and verifies the
+# expected files exist with reasonable sizes. Extraction is preferred over
+# `7z l` parsing because:
+#   - The default `7z l` table layout failed to capture sizes for entries
+#     without an extension (yt-dlp, deno).
+#   - `7z l -slt` does not emit Path/Size records for the embedded files of
+#     an NSIS archive — only outer-archive metadata.
+# Extracting and stat-ing the result on disk works regardless of how 7-Zip
+# chooses to surface NSIS internals.
 #
 # Usage: pwsh installer/tests/test-nsis-extract.ps1 <path-to-installer.exe>
 
@@ -27,25 +34,31 @@ if (-not $sevenZip) {
     exit 70
 }
 
-# Use 7z's structured long-format listing (-slt) instead of the human-
-# readable table. -slt emits "Path = ..." / "Size = ..." records per file,
-# which is robust against NSIS prefixing entries with $PLUGINSDIR\, mixing
-# slashes, or tab-padding columns. The default `7z l` output failed to
-# capture sizes for entries like `yt-dlp` / `deno` because the regex didn't
-# tolerate the actual column layout produced by NSIS archives.
-$slt = & 7z l -slt $InstallerExe 2>&1 | Out-String
+$extractRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$extractDir = Join-Path $extractRoot 'nsis-smoke-extract'
+if (Test-Path -LiteralPath $extractDir) {
+    Remove-Item -Recurse -Force -LiteralPath $extractDir
+}
+New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
 
+# `7z x -y` extracts everything quietly. NSIS archives may use forward or
+# backward slashes internally; 7z translates them to native paths.
+& 7z x $InstallerExe "-o$extractDir" -y *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "7z extract failed (exit $LASTEXITCODE)"
+    exit 71
+}
+
+# Build a basename -> file size map across the entire extracted tree. The
+# basename is what we test against, since NSIS may stash files under
+# $PLUGINSDIR\ or $INSTDIR\ subdirectories that the test does not care about.
+# If the same basename appears more than once (rare), take the largest —
+# that's the application binary, not a plugin stub.
 $sizes = @{}
-$currentPath = $null
-foreach ($line in ($slt -split "`r?`n")) {
-    if ($line -match '^Path = (.+)$') {
-        $currentPath = $Matches[1].Trim()
-    } elseif ($line -match '^Size = (\d+)\s*$' -and $null -ne $currentPath) {
-        # Key the dictionary by basename — NSIS paths may carry a $PLUGINSDIR
-        # prefix or use forward/back slashes. Split-Path -Leaf normalises both.
-        $leaf = Split-Path -Leaf $currentPath
-        $sizes[$leaf] = [int64]$Matches[1]
-        $currentPath = $null
+Get-ChildItem -Recurse -File -LiteralPath $extractDir | ForEach-Object {
+    $existing = if ($sizes.ContainsKey($_.Name)) { $sizes[$_.Name] } else { -1 }
+    if ($_.Length -gt $existing) {
+        $sizes[$_.Name] = $_.Length
     }
 }
 
@@ -62,7 +75,7 @@ $expected = @(
 $failures = 0
 foreach ($name in $expected) {
     if ($sizes.ContainsKey($name)) {
-        Write-Host "ok: $name present in installer"
+        Write-Host "ok: $name present in installer ($($sizes[$name]) bytes)"
     } else {
         Write-Host "FAIL: $name missing from installer"
         $failures++
@@ -86,6 +99,8 @@ Test-MinSize 'deno'   30000000
 if ($failures -gt 0) {
     Write-Host ""
     Write-Host "$failures checks failed"
+    Write-Host "Extracted contents (for debugging):"
+    Get-ChildItem -Recurse -File -LiteralPath $extractDir | Select-Object FullName, Length | Format-Table -AutoSize | Out-String | Write-Host
     exit 1
 }
 Write-Host ""

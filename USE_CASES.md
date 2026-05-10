@@ -37,3 +37,4 @@ Statuses:
 | 25 | [use-cases/25-trim-release-assets-to-installers.md](use-cases/25-trim-release-assets-to-installers.md) | Trim release-pipeline assets to installers + provenance only | pending | 2026-05-10 |
 | 26 | [use-cases/26-fix-macos-arm64-launch-failure.md](use-cases/26-fix-macos-arm64-launch-failure.md) | Fix macOS arm64 launch failure (Dock-bounce-and-die on macOS 26.x) | pending | 2026-05-10 |
 | 27 | [use-cases/27-instant-skeleton-rows-on-add.md](use-cases/27-instant-skeleton-rows-on-add.md) | Instant skeleton rows on Add (optimistic placeholder cards) | pending | 2026-05-10 |
+| 28 | [use-cases/28-bundle-ffprobe-and-verify-ffmpeg.md](use-cases/28-bundle-ffprobe-and-verify-ffmpeg.md) | Bundle ffprobe (and verify ffmpeg) for audio-only post-processing | pending | 2026-05-10 |

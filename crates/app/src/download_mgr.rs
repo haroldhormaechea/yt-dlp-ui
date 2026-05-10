@@ -762,27 +762,12 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
             self.cancel_one(id).await;
             // Wait until the row reaches `cancelled` (or terminal) before
             // touching the `.part` file — yt-dlp may still be flushing.
-            let db = self.db.clone();
-            let wait = async move {
-                loop {
-                    let snapshot = {
-                        let db = db.clone();
-                        tokio::task::spawn_blocking(move || {
-                            db.with_conn(|c| queue::find_by_url_by_id_internal(c, id))
-                        })
-                        .await
-                    };
-                    if let Ok(Ok(Some(r))) = snapshot
-                        && !matches!(r.status, QueueStatus::InFlight | QueueStatus::Cancelling)
-                    {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            };
-            if tokio::time::timeout(Duration::from_secs(5), wait)
-                .await
-                .is_err()
+            if tokio::time::timeout(
+                Duration::from_secs(5),
+                wait_until_terminal(self.db.clone(), id),
+            )
+            .await
+            .is_err()
             {
                 tracing::warn!(
                     id,
@@ -818,6 +803,168 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
         .await;
 
         let _ = self.ui_tx.send(UiEvent::RowRemoved(id)).await;
+        Ok(())
+    }
+
+    /// UC 12: clear the entire queue.
+    ///
+    /// Flow:
+    /// 1. List all rows and partition into "active" (rows the per-row cancel
+    ///    pipeline must tear down — `Queued`, `InFlight`, `Cancelling`, or
+    ///    `title_status = fetching`) and "terminal" (everything else,
+    ///    deleted directly).
+    /// 2. Fire `cancel_one` on each active id sequentially. The existing
+    ///    pipeline handles each row's state transitions and — crucially for
+    ///    AC #9 — invokes `BotCheckCoordinator::withdraw` on any
+    ///    `waiting_on_user` row via the supervisor's `cancel.notified()`
+    ///    arm. No new bot-check helper is added.
+    /// 3. Wait (concurrently, capped at 5 s wall-clock) for every formerly-
+    ///    active row to leave the `in_flight` / `cancelling` transient
+    ///    states — yt-dlp may still be flushing.
+    /// 4. Best-effort delete each row's `.part` file (re-read so any path
+    ///    persisted by the bridge between steps 2 and 3 is picked up).
+    /// 5. Single SQLite transaction: prune `history` rows referencing
+    ///    `done` queue items (the `history.queue_item_id NOT NULL
+    ///    REFERENCES queue_items(id)` FK with `PRAGMA foreign_keys = ON`
+    ///    would otherwise reject the bulk delete), then `DELETE FROM
+    ///    queue_items`. AC #10 — the rest of `history` is untouched, so
+    ///    completed-download history remains append-only for any rows that
+    ///    don't survive in the queue but whose history entries we keep.
+    ///    (Today every `done` row carries at most one history entry; the
+    ///    prune scope is exactly those.)
+    /// 6. Emit `RowRemoved` per id so `ui_bridge` clears the Slint
+    ///    VecModel and `recompute_counts` runs (AC #7).
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`DbError`] when the seed read or the bulk-
+    /// delete transaction fails. Partial state (cancels fired but the
+    /// transaction failed) leaves cancelled rows visible in the queue —
+    /// identical posture to a successful Cancel-all followed by a failed
+    /// per-row Remove.
+    #[allow(clippy::too_many_lines)]
+    pub async fn remove_all(&self) -> Result<(), DbError> {
+        let rows: Vec<QueueItem> = {
+            let db = self.db.clone();
+            tokio::task::spawn_blocking(move || db.with_conn(queue::list_all))
+                .await
+                .map_err(|e| DbError::Decode(format!("join error: {e}")))??
+        };
+
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let mut active_ids: Vec<i64> = Vec::new();
+        let mut all_ids: Vec<i64> = Vec::with_capacity(rows.len());
+        for row in &rows {
+            all_ids.push(row.id);
+            let is_active = matches!(
+                row.status,
+                QueueStatus::Queued | QueueStatus::InFlight | QueueStatus::Cancelling
+            ) || matches!(row.title_status, TitleStatus::Fetching);
+            if is_active {
+                active_ids.push(row.id);
+            }
+        }
+
+        // Step 2: fire cancel-one per active id, sequentially. The cancel
+        // pipeline holds locks on `cancel_tokens` / `metadata_cancel_tokens`;
+        // sequential keeps the lock posture identical to a stream of
+        // per-row Cancel clicks and avoids reordering the bridge's stdout
+        // drain across rows.
+        for &id in &active_ids {
+            self.cancel_one(id).await;
+        }
+
+        // Step 3: wait for every active row to reach a terminal-ish state,
+        // capped at 5 s wall-clock total (not per-row) via a single shared
+        // deadline. Each wait runs on its own tokio task (`JoinSet`) so the
+        // 100 ms polling intervals interleave instead of serializing —
+        // wall-clock collapses from `Σ(per-row)` to `max(per-row, 5 s)`.
+        if !active_ids.is_empty() {
+            let mut join_set = tokio::task::JoinSet::new();
+            for &id in &active_ids {
+                let db = self.db.clone();
+                join_set.spawn(async move {
+                    wait_until_terminal(db, id).await;
+                });
+            }
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let mut timed_out = false;
+            loop {
+                match tokio::time::timeout_at(deadline, join_set.join_next()).await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(_) => {
+                        timed_out = true;
+                        break;
+                    }
+                }
+            }
+            if timed_out {
+                tracing::warn!("remove_all: not all cancels confirmed within 5s; proceeding");
+                join_set.abort_all();
+            }
+        }
+
+        // Step 4: best-effort delete any `.part` files. Re-read each row so
+        // a `partial_file_path` persisted by the bridge between step 2 and
+        // step 3 is observed; failures log at WARN and do not abort the
+        // bulk delete (same posture as `remove_one`).
+        for &id in &all_ids {
+            let final_item = {
+                let db = self.db.clone();
+                let res = tokio::task::spawn_blocking(move || {
+                    db.with_conn(|c| queue::find_by_url_by_id_internal(c, id))
+                })
+                .await;
+                match res {
+                    Ok(Ok(item)) => item,
+                    _ => None,
+                }
+            };
+            if let Some(item) = final_item.as_ref()
+                && let Some(part) = item.partial_file_path.as_ref()
+                && tokio::fs::try_exists(part).await.unwrap_or(false)
+                && let Err(err) = tokio::fs::remove_file(part).await
+            {
+                tracing::warn!(id, ?err, path = %part.display(), "remove_all: .part file removal failed");
+            }
+        }
+
+        // Step 5: single transaction — prune history rows for `done`
+        // queue items, then delete every queue row. The history prune
+        // mirrors `queue::delete_by_id`'s per-row cascade. `PRAGMA
+        // foreign_keys = ON` (set at connection init in `db/mod.rs`)
+        // would otherwise reject the bulk `DELETE FROM queue_items` for
+        // any `done` row with a history entry.
+        tokio::task::spawn_blocking({
+            let db = self.db.clone();
+            move || -> Result<(), DbError> {
+                db.with_conn_mut(|c| {
+                    let tx = c.transaction()?;
+                    tx.execute(
+                        "DELETE FROM history WHERE queue_item_id IN \
+                         (SELECT id FROM queue_items WHERE status = 'done')",
+                        [],
+                    )?;
+                    tx.execute("DELETE FROM queue_items", [])?;
+                    tx.commit()?;
+                    Ok(())
+                })
+            }
+        })
+        .await
+        .map_err(|e| DbError::Decode(format!("join error: {e}")))??;
+
+        // Step 6: emit RowRemoved per id so ui_bridge mirrors the DB
+        // (AC #7). Sent on the existing bounded mpsc channel; the UI bridge
+        // drains them serially.
+        for &id in &all_ids {
+            let _ = self.ui_tx.send(UiEvent::RowRemoved(id)).await;
+        }
+
         Ok(())
     }
 
@@ -1560,6 +1707,38 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
             // Wake the runner so the next queued item is picked up.
             let _ = wake.try_send(());
         });
+    }
+}
+
+/// Polls the row until it leaves `in_flight` / `cancelling`. Shared by
+/// `remove_one` (single-row case) and `remove_all` (bulk case).
+///
+/// The caller is responsible for the surrounding `tokio::time::timeout`
+/// because the bulk path drives many of these concurrently under a single
+/// outer timeout — embedding the timeout here would force a per-row
+/// 5 s wall-clock floor instead of letting `tokio::task::JoinSet` collapse
+/// the wait to `max(per-row, 5 s)`.
+async fn wait_until_terminal(db: Db, id: i64) {
+    loop {
+        let snapshot = {
+            let db = db.clone();
+            tokio::task::spawn_blocking(move || {
+                db.with_conn(|c| queue::find_by_url_by_id_internal(c, id))
+            })
+            .await
+        };
+        match snapshot {
+            Ok(Ok(Some(r)))
+                if !matches!(r.status, QueueStatus::InFlight | QueueStatus::Cancelling) =>
+            {
+                return;
+            }
+            // Row already vanished (e.g. another path deleted it
+            // concurrently) — nothing to wait on.
+            Ok(Ok(None)) => return,
+            _ => {}
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

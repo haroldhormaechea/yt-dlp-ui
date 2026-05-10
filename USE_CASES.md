@@ -21,7 +21,7 @@ Statuses:
 | 09 | [use-cases/09-settings-slide-in-panel.md](use-cases/09-settings-slide-in-panel.md) | Settings slide-in panel | done | 2026-05-03 |
 | 10 | [use-cases/10-bot-check-modal-ui.md](use-cases/10-bot-check-modal-ui.md) | Bot-check modal UI | done | 2026-05-03 |
 | 11 | [use-cases/11-ad-slot-deno-banner-toast.md](use-cases/11-ad-slot-deno-banner-toast.md) | Ad slot, deno banner, and Toast component | done | 2026-05-03 |
-| 12 | [use-cases/12-remove-all-queue-items.md](use-cases/12-remove-all-queue-items.md) | Remove all queue items | in-progress | 2026-05-06 |
+| 12 | [use-cases/12-remove-all-queue-items.md](use-cases/12-remove-all-queue-items.md) | Remove all queue items | done | 2026-05-10 |
 | 13 | [use-cases/13-icon-fidelity-fix.md](use-cases/13-icon-fidelity-fix.md) | Icon fidelity fix (sizing + centering, app-wide) | done | 2026-05-06 |
 | 14 | [use-cases/14-start-all-resume-and-retry.md](use-cases/14-start-all-resume-and-retry.md) | Broaden Start all to also resume cancelled and retry errored rows | done | 2026-05-08 |
 | 15 | [use-cases/15-fix-video-list-scrolling.md](use-cases/15-fix-video-list-scrolling.md) | Fix scrolling on the video list | done | 2026-05-07 |

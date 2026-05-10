@@ -1,0 +1,175 @@
+// Remove-all confirmation modal — UC 12.
+//
+// Modeled on UC 10's bot-check modal (layered-Rectangle, NOT PopupWindow):
+// backdrop sibling + centered card, both rendered only when `open` is true.
+// All visuals bind to UC 07's `DesignTokens` so a `dark-mode` flip re-themes
+// the modal live (AC #12).
+//
+// Body lines and primary-button label are pre-rendered in Rust
+// (`ui_bridge::format_remove_all_body` / `format_remove_all_primary_label`)
+// so pluralization lives in one place that is unit-testable. The host sets
+// `body-line-1`, `body-line-2`, and `primary-button-label` on the same
+// callback that flips `open = true`.
+//
+// AC #11 (bot-check modal interlock): UC 10's translucent backdrop has a
+// covering `TouchArea` that intercepts every click while it is open, so a
+// Remove-all click cannot fire while the bot-check is on screen. No new
+// guard is needed; the contract is enforced by UC 10's backdrop.
+
+import { DesignTokens } from "design/tokens.slint";
+import { Button as DButton } from "design/components.slint";
+
+export component RemoveAllConfirmModal inherits Rectangle {
+    in property <bool> open;
+    // Counts the host pre-renders into `body-line-1` / `body-line-2`. Kept
+    // as in-properties (rather than read off `body-line-*`) so a future test
+    // hook can introspect the modal without parsing the rendered strings.
+    in property <int> total-count;
+    in property <int> in-flight-count;
+    // Two pre-rendered body lines. `body-line-2` is the in-flight call-out;
+    // host writes an empty string when `in-flight-count == 0` so AC #5's
+    // "omit when K == 0" rule is enforced in one place.
+    in property <string> body-line-1;
+    in property <string> body-line-2;
+    // Pre-rendered danger-button label (e.g. "Remove 5").
+    in property <string> primary-button-label;
+
+    callback confirm();
+    callback cancel();
+
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // No `states [...]` block — unlike UC 10 / UC 18's modals, this modal
+    // has no transient internal state to reset between opens. Body lines
+    // and the primary-button label are host-driven in-properties that are
+    // overwritten on every `remove-all-clicked` callback, so reset is a
+    // side effect of the open path rather than a state-edge declaration.
+
+    // Backdrop — clicking dismisses the modal (AC #6).
+    if root.open : Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        background: #0a0a0f6b; // rgba(10, 10, 15, 0.42), matches UC 10
+        opacity: 1;
+        animate opacity { duration: 180ms; easing: cubic-bezier(0.2, 0.8, 0.3, 1); }
+
+        TouchArea {
+            clicked => { root.cancel(); }
+        }
+    }
+
+    // Centered card — 440 px wide, content-driven height. Mirrors UC 10's
+    // panel dimensions so the two modals feel like siblings.
+    if root.open : Rectangle {
+        width: 440px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        height: layout.preferred-height;
+        background: DesignTokens.surface;
+        border-color: DesignTokens.border;
+        border-width: 1px;
+        border-radius: 10px;
+        drop-shadow-color: DesignTokens.shadow-lg-color;
+        drop-shadow-blur: DesignTokens.shadow-lg-blur;
+        drop-shadow-offset-y: DesignTokens.shadow-lg-offset-y;
+
+        layout := VerticalLayout {
+            spacing: 0;
+
+            // ─── Header ─────────────────────────────────────────────
+            Rectangle {
+                background: transparent;
+                height: header-layout.preferred-height;
+
+                header-layout := HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 6px;
+                    spacing: 0;
+                    alignment: stretch;
+
+                    Text {
+                        text: "Remove all queue items?";
+                        color: DesignTokens.text;
+                        font-family: DesignTokens.font-ui-family;
+                        font-size: 14.5px;
+                        font-weight: 600;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+
+            // ─── Body ───────────────────────────────────────────────
+            Rectangle {
+                background: transparent;
+                height: body-layout.preferred-height;
+
+                body-layout := VerticalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 6px;
+                    padding-bottom: 14px;
+                    spacing: 6px;
+
+                    Text {
+                        text: root.body-line-1;
+                        color: DesignTokens.text-2;
+                        font-family: DesignTokens.font-ui-family;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    // AC #5: omit the second sentence when K == 0. The host
+                    // writes an empty string for that case, so guarding on
+                    // `!= ""` keeps the omission rule local to Rust.
+                    if root.body-line-2 != "" : Text {
+                        text: root.body-line-2;
+                        color: DesignTokens.text-2;
+                        font-family: DesignTokens.font-ui-family;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            // ─── Footer ─────────────────────────────────────────────
+            Rectangle {
+                background: transparent;
+                height: footer-layout.preferred-height;
+
+                footer-layout := HorizontalLayout {
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    padding-top: 8px;
+                    padding-bottom: 16px;
+                    spacing: 8px;
+                    alignment: stretch;
+
+                    // Spacer — push buttons to the right.
+                    Rectangle {
+                        background: transparent;
+                        horizontal-stretch: 1;
+                    }
+
+                    DButton {
+                        text: "Cancel";
+                        variant: "ghost";
+                        clicked => { root.cancel(); }
+                    }
+
+                    DButton {
+                        text: root.primary-button-label;
+                        variant: "danger";
+                        clicked => { root.confirm(); }
+                    }
+                }
+            }
+        }
+    }
+}

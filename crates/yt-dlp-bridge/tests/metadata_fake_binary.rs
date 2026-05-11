@@ -1001,7 +1001,7 @@ echo '{"webpage_url":"https://example.com/p3","title":"P3"}'
             assert_eq!(entries[1].title, None);
             assert_eq!(entries[2].title.as_deref(), Some("P3"));
         }
-        other => panic!("expected Playlist, got {other:?}"),
+        other @ EnumerationOutcome::SingleVideo => panic!("expected Playlist, got {other:?}"),
     }
     drop(tmp);
 }

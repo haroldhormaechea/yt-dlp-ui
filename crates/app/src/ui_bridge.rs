@@ -156,7 +156,7 @@ fn apply_event(weak: &Weak<MainWindow>, event: UiEvent) {
     };
     match event {
         UiEvent::RowUpserted(row) => {
-            upsert_row(&window, row);
+            upsert_row(&window, *row);
             recompute_counts(&window);
         }
         UiEvent::RowRemoved(id) => {
@@ -270,15 +270,13 @@ fn replace_row_with_children(
         vec_model.remove(i);
     }
     let insert_at = idx.unwrap_or_else(|| vec_model.row_count());
-    let mut current = insert_at;
-    for child in children {
+    for (current, child) in (insert_at..).zip(children) {
         let slint_row = crate::ui_row_for_test(child);
         if current <= vec_model.row_count() {
             vec_model.insert(current, slint_row);
         } else {
             vec_model.push(slint_row);
         }
-        current += 1;
     }
 }
 

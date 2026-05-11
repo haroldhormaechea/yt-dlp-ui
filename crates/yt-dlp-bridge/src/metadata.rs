@@ -471,7 +471,11 @@ pub struct VideoMetadata {
     /// extractors; absent on a handful where the extractor cannot probe
     /// the media without a full HLS/DASH manifest fetch. `Option<u64>` so
     /// the UI can render a skeleton instead of "0s".
-    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    #[serde(
+        rename = "duration",
+        default,
+        deserialize_with = "deserialize_optional_duration"
+    )]
     pub duration_s: Option<u64>,
 }
 
@@ -511,7 +515,7 @@ where
 #[derive(Debug, Clone)]
 pub enum EnumerationOutcome {
     SingleVideo,
-    Playlist(Vec<PlaylistEntry>),
+    Playlist(Box<Vec<PlaylistEntry>>),
 }
 
 /// Cancellable single-video metadata fetch (UC 27).
@@ -727,5 +731,5 @@ pub async fn enumerate_playlist_cancellable(
         // video so the caller's metadata fallback runs against the input URL.
         return Ok(EnumerationOutcome::SingleVideo);
     }
-    Ok(EnumerationOutcome::Playlist(entries))
+    Ok(EnumerationOutcome::Playlist(Box::new(entries)))
 }

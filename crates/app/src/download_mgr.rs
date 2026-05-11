@@ -64,7 +64,7 @@ const DISPLAY_ORDER_STRIDE: u64 = 1_048_576;
 
 /// UC 27. How long we let `yt-dlp --dump-single-json` and `--flat-playlist`
 /// run before timing out the placeholder's enumeration / metadata fetch.
-/// Mirrors [`TITLE_TIMEOUT`] (the cancellable get_title path) so the
+/// Mirrors [`TITLE_TIMEOUT`] (the cancellable `get_title` path) so the
 /// placeholder UX has the same wall-clock ceiling as today's title fetch.
 const METADATA_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -356,7 +356,7 @@ enum TerminalReason {
 pub enum UiEvent {
     /// A new row was inserted (or a fetched title arrived for an existing row).
     /// The UI should refresh its model from `row`.
-    RowUpserted(UiQueueRow),
+    RowUpserted(Box<UiQueueRow>),
     /// A row was removed (e.g. a duplicate was rejected; not used in UC 01,
     /// reserved for UC 02).
     RowRemoved(i64),
@@ -634,12 +634,9 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
             })
             .await
         };
-        let item = match row {
-            Ok(Ok(Some(r))) => r,
-            _ => {
-                self.wake();
-                return;
-            }
+        let Ok(Ok(Some(item))) = row else {
+            self.wake();
+            return;
         };
         if matches!(item.kind, PlaceholderKind::Pending)
             && matches!(item.title_status, TitleStatus::Fetching)
@@ -1180,8 +1177,8 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
         let mut pending_rows_for_respawn: Vec<(i64, String, FormatPref, PathBuf)> = Vec::new();
         for r in &rows {
             if !matches!(r.status, QueueStatus::Cancelled | QueueStatus::Error)
-                && !(matches!(r.kind, PlaceholderKind::Pending)
-                    && matches!(r.title_status, TitleStatus::Error))
+                && (!matches!(r.kind, PlaceholderKind::Pending)
+                    || !matches!(r.title_status, TitleStatus::Error))
             {
                 continue;
             }
@@ -1270,17 +1267,11 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
         })
         .await;
         if let Ok(Ok(Some(item))) = row {
-            let _ = self.ui_tx.send(UiEvent::RowUpserted(to_ui_row(item))).await;
+            let _ = self
+                .ui_tx
+                .send(UiEvent::RowUpserted(Box::new(to_ui_row(item))))
+                .await;
         }
-    }
-
-    async fn read_cookies_arg(&self) -> Result<Option<String>, AddError> {
-        let db = self.db.clone();
-        let choice =
-            tokio::task::spawn_blocking(move || db.with_conn(settings::get_cookies_browser))
-                .await
-                .map_err(|e| AddError::Db(DbError::Decode(format!("join error: {e}"))))??;
-        Ok(choice.map(|b| b.as_yt_dlp_arg().to_string()))
     }
 
     async fn read_cookies_arg_db_only(&self) -> Option<String> {
@@ -1396,33 +1387,30 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
                 permit = semaphore.acquire_owned() => Some(permit),
                 () = cancel.notified() => None,
             };
-            let _permit = match permit_outcome {
-                Some(Ok(p)) => p,
-                Some(Err(_)) | None => {
-                    // Cancelled (or semaphore closed). Flip the row to
-                    // cancelled without tainting title_error.
-                    let _ = tokio::task::spawn_blocking({
-                        let db = db.clone();
-                        move || {
-                            db.with_conn(|c| {
-                                queue::update_status(c, placeholder_id, QueueStatus::Cancelled)
-                            })
-                        }
-                    })
-                    .await;
-                    let _ = tokio::task::spawn_blocking({
-                        let db = db.clone();
-                        move || {
-                            db.with_conn(|c| {
-                                queue::update_title(c, placeholder_id, None, TitleStatus::Pending)
-                            })
-                        }
-                    })
-                    .await;
-                    metadata_cancel_tokens.lock().await.remove(&placeholder_id);
-                    emit_row(&db, &ui_tx, placeholder_id).await;
-                    return;
-                }
+            let Some(Ok(_permit)) = permit_outcome else {
+                // Cancelled (or semaphore closed). Flip the row to
+                // cancelled without tainting title_error.
+                let _ = tokio::task::spawn_blocking({
+                    let db = db.clone();
+                    move || {
+                        db.with_conn(|c| {
+                            queue::update_status(c, placeholder_id, QueueStatus::Cancelled)
+                        })
+                    }
+                })
+                .await;
+                let _ = tokio::task::spawn_blocking({
+                    let db = db.clone();
+                    move || {
+                        db.with_conn(|c| {
+                            queue::update_title(c, placeholder_id, None, TitleStatus::Pending)
+                        })
+                    }
+                })
+                .await;
+                metadata_cancel_tokens.lock().await.remove(&placeholder_id);
+                emit_row(&db, &ui_tx, placeholder_id).await;
+                return;
             };
 
             let cookies_arg = mgr.read_cookies_arg_db_only().await;
@@ -1459,10 +1447,8 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
                         .and_then(Result::ok)
                         .flatten()
                     };
-                    let was_start_requested = pre_metadata_row
-                        .as_ref()
-                        .map(|r| r.start_requested)
-                        .unwrap_or(false);
+                    let was_start_requested =
+                        pre_metadata_row.as_ref().is_some_and(|r| r.start_requested);
                     if was_start_requested {
                         // Clear the latched intent in the DB now that the
                         // row is a `video` and eligible for auto-promotion;
@@ -1861,7 +1847,9 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
             })
             .await
             {
-                let _ = ui_tx.send(UiEvent::RowUpserted(to_ui_row(item))).await;
+                let _ = ui_tx
+                    .send(UiEvent::RowUpserted(Box::new(to_ui_row(item))))
+                    .await;
             }
         });
     }
@@ -2390,7 +2378,9 @@ async fn emit_row(db: &Db, ui_tx: &mpsc::Sender<UiEvent>, id: i64) {
     })
     .await
     {
-        let _ = ui_tx.send(UiEvent::RowUpserted(to_ui_row(item))).await;
+        let _ = ui_tx
+            .send(UiEvent::RowUpserted(Box::new(to_ui_row(item))))
+            .await;
     }
 }
 
@@ -2430,7 +2420,7 @@ fn to_ui_row(item: QueueItem) -> UiQueueRow {
     }
 }
 
-/// UC 27. Parses a SQLite `CURRENT_TIMESTAMP` ("YYYY-MM-DD HH:MM:SS" in
+/// UC 27. Parses a `SQLite` `CURRENT_TIMESTAMP` ("YYYY-MM-DD HH:MM:SS" in
 /// UTC) into Unix epoch milliseconds. Returns `None` on any parse failure;
 /// the caller falls back to `current_unix_ms` so a stale string never breaks
 /// the row.
@@ -2452,7 +2442,8 @@ fn parse_sqlite_timestamp_to_unix_ms(s: &str) -> Option<i64> {
     // date to days since 1970-01-01 without any chrono dep.
     let y = if month <= 2 { year - 1 } else { year };
     let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u32;
+    let yoe = u32::try_from(y - era * 400)
+        .expect("y - era*400 is in [0, 399] by construction (days-from-civil — Howard Hinnant)");
     let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days_since_epoch = i64::from(era) * 146_097 + i64::from(doe) - 719_468;
@@ -2464,14 +2455,13 @@ fn parse_sqlite_timestamp_to_unix_ms(s: &str) -> Option<i64> {
 fn current_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// UC 27. AuthRequired handler for placeholder rows.
+/// UC 27. `AuthRequired` handler for placeholder rows.
 ///
 /// Surfaces the bot-check modal so the user can pick a cookies source,
-/// then records a per-row title_error. The placeholder row stays
+/// then records a per-row `title_error`. The placeholder row stays
 /// `kind = 'pending'` so the user's Restart click on the row's error
 /// affordance re-spawns enumeration (via `restart_one`'s pending-kind
 /// branch) with the freshly-persisted cookies.

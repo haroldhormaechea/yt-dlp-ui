@@ -779,7 +779,7 @@ fn max_display_order_picks_up_highest_value() {
     .enumerate()
     {
         let mut item = make_item(url);
-        item.display_order = (i as i64 + 1) * 1_048_576;
+        item.display_order = (i64::try_from(i).unwrap() + 1) * 1_048_576;
         queue::insert(&conn, item).unwrap();
     }
     let v = queue::max_display_order(&conn).unwrap();
@@ -892,21 +892,21 @@ fn replace_placeholder_with_children_collides_via_insert_or_ignore() {
     assert_eq!(out.len(), 2);
 
     // Tag + id of the colliding entry == pre-existing row.
-    let (idx0, id0, tag0) = out[0];
-    assert_eq!(idx0, 0);
+    let (index, row_id, tag) = out[0];
+    assert_eq!(index, 0);
     assert_eq!(
-        id0, preexisting_id,
+        row_id, preexisting_id,
         "collision must return the pre-existing winner's row id"
     );
     assert!(
-        matches!(tag0, InsertedOrPreexisting::Preexisting),
+        matches!(tag, InsertedOrPreexisting::Preexisting),
         "tag must be Preexisting on collision"
     );
 
-    let (idx1, _id1, tag1) = out[1];
-    assert_eq!(idx1, 1);
+    let (fresh_index, _fresh_row_id, fresh_tag) = out[1];
+    assert_eq!(fresh_index, 1);
     assert!(
-        matches!(tag1, InsertedOrPreexisting::Inserted),
+        matches!(fresh_tag, InsertedOrPreexisting::Inserted),
         "tag must be Inserted for the non-colliding entry"
     );
 

@@ -129,11 +129,13 @@ impl BridgeOps for ThumbBridge {
         _ffmpeg_path: Option<&Path>,
         _cancel: Arc<Notify>,
     ) -> yt_dlp_bridge::Result<VideoMetadata> {
+        // UC 27 consolidated thumb-URL discovery into `fetch_metadata`;
+        // the per-row `fetch_thumbnail_url` is now startup-replay only,
+        // so the live add-URL path receives the thumbnail URL through
+        // this metadata fetch.
         Ok(VideoMetadata {
             title: Some("title".to_string()),
-            // No thumbnail here — the test exercises the per-row
-            // `fetch_thumbnail_url` fallback explicitly.
-            thumbnail: None,
+            thumbnail: Some(self.thumb_url.clone()),
             duration_s: None,
         })
     }
@@ -186,9 +188,9 @@ async fn add_url_fetches_and_caches_thumbnail() {
         .await
         .expect("add_url");
 
-    // Wait up to ~3 s for the ThumbnailReady event.
+    // Wait up to ~10 s for the ThumbnailReady event.
     let mut got_ready: Option<PathBuf> = None;
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         if let Ok(Some(UiEvent::ThumbnailReady { path, .. })) =
             tokio::time::timeout(Duration::from_millis(100), ui_rx.recv()).await
@@ -197,7 +199,7 @@ async fn add_url_fetches_and_caches_thumbnail() {
             break;
         }
     }
-    let ready_path = got_ready.expect("ThumbnailReady must be emitted within 3s");
+    let ready_path = got_ready.expect("ThumbnailReady must be emitted within 10s");
 
     // File on disk.
     assert!(

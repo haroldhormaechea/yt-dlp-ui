@@ -24,7 +24,8 @@ pub use download::{DownloadEvent, DownloadRequest, start};
 pub use error::{BridgeError, Result};
 pub use format::FormatPref;
 pub use metadata::{
-    PlaylistEntry, expand_playlist, get_thumbnail_url, get_title, get_title_cancellable,
+    EnumerationOutcome, PlaylistEntry, VideoMetadata, enumerate_playlist_cancellable,
+    expand_playlist, fetch_metadata, get_thumbnail_url, get_title, get_title_cancellable,
 };
 pub use parser::{parse_destination_line, parse_progress_line};
 

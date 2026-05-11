@@ -19,6 +19,17 @@ import "../../assets/fonts/Inter-Bold.ttf";
 // JetBrains Mono — SIL OFL 1.1; license at crates/app/assets/fonts/LICENSE.OFL.txt; attribution in LICENSE
 import "../../assets/fonts/JetBrainsMono-Regular.ttf";
 
+// UC 27. Wall-clock global driven by a `slint::Timer` on the Rust side. The
+// timer updates `current-now-ms` every ~500 ms; `QueueRow` delegates compare
+// the value to each row's `placeholder-started-at-ms` to flip the
+// "Still fetching info…" affordance after 5 s. `pending-placeholder-count`
+// is the gate predicate — the timer suspends when zero placeholders are
+// alive so a quiet app does not burn CPU cycles waking the UI.
+export global Clock {
+    in-out property <int> current-now-ms: 0;
+    in-out property <int> pending-placeholder-count: 0;
+}
+
 export global DesignTokens {
     // Selected at startup from the persisted setting (or the OS preference).
     in-out property <bool> dark-mode: false;

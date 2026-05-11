@@ -179,8 +179,8 @@ fn seeded_row_survives_smoke_run() {
         })
         .expect("schema_version query");
     assert_eq!(
-        max_version, 3,
-        "schema_version must be at v3 after UC 02 migration"
+        max_version, 4,
+        "schema_version must be at v4 after UC 27 migration"
     );
 
     let new_columns: Vec<String> = db

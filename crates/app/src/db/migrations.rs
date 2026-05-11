@@ -35,6 +35,10 @@ const MIGRATIONS: &[Migration] = &[
         version: 3,
         sql: include_str!("migrations/0003_uc02_partial_file_path.sql"),
     },
+    Migration {
+        version: 4,
+        sql: include_str!("migrations/0004_uc27_placeholder_rows.sql"),
+    },
 ];
 
 /// Runs all migrations whose version is greater than the current

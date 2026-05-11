@@ -9,13 +9,16 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use tokio::sync::{Mutex as TokioMutex, Notify, mpsc};
-use yt_dlp_bridge::{BridgeError, DownloadEvent, DownloadRequest, FormatPref, PlaylistEntry};
+use yt_dlp_bridge::{
+    BridgeError, DownloadEvent, DownloadRequest, EnumerationOutcome, FormatPref, PlaylistEntry,
+    VideoMetadata,
+};
 
 use super::{AddError, AddOutcome, BridgeOps, DownloadManager, UiEvent};
 use crate::browsers::Browser;
 use crate::db::Db;
 use crate::db::settings;
-use crate::model::QueueStatus;
+use crate::model::{PlaceholderKind, QueueStatus, TitleStatus};
 
 /// Per-call outcome the fake bridge serves for `start_download`. Pulled from
 /// `FakeBehavior::download_outcomes` in FIFO order; if the queue is empty the
@@ -32,6 +35,27 @@ enum DownloadOutcome {
 #[derive(Clone)]
 enum ExpandOutcome {
     AuthRequired { stderr_tail: String },
+}
+
+/// UC 27 per-call enumeration outcome served by the fake bridge's
+/// `enumerate_playlist_cancellable`. FIFO; default falls back to
+/// `playlist_entries` (matching `expand_playlist`'s shape).
+#[derive(Clone)]
+enum EnumerationFakeOutcome {
+    SingleVideo,
+    Playlist(Vec<PlaylistEntry>),
+    AuthRequired { stderr_tail: String },
+    Error(&'static str),
+}
+
+/// UC 27 per-call metadata outcome served by the fake bridge's
+/// `fetch_metadata_cancellable`. FIFO; default returns a stock title-only
+/// `VideoMetadata`.
+#[derive(Clone)]
+enum MetadataFakeOutcome {
+    Ok(VideoMetadata),
+    AuthRequired { stderr_tail: String },
+    Error(&'static str),
 }
 
 /// Records a captured `DownloadRequest` for assertion (UC 05 retry
@@ -78,6 +102,31 @@ struct FakeBehavior {
     /// variant resolves immediately (matching `fetch_title`'s shape so
     /// pre-UC-02 tests stay green).
     metadata_cancel_dwell: Option<Duration>,
+    /// UC 27: when set, `enumerate_playlist_cancellable` sleeps this long
+    /// before resolving its outcome. Used by the AC#1 budget test to
+    /// model a slow upstream enumeration while asserting that `add_url`
+    /// returns synchronously well below the 100 ms budget.
+    enumeration_dwell: Option<Duration>,
+    /// UC 27 per-call enumeration outcomes (FIFO). When empty, the fake
+    /// falls back to `playlist_entries`: empty → `SingleVideo`, non-empty
+    /// → `Playlist(entries)`. Matches the default produced by the real
+    /// bridge so legacy tests stay green.
+    enumeration_outcomes: Vec<EnumerationFakeOutcome>,
+    /// UC 27 per-call metadata outcomes (FIFO). When empty, the fake
+    /// returns a stock `VideoMetadata` with `title = "Real Title"`.
+    metadata_outcomes: Vec<MetadataFakeOutcome>,
+    /// UC 27: when set, `fetch_metadata_cancellable` sleeps this long
+    /// before resolving its outcome, racing the dwell against the
+    /// cancel notify. Lets tests park the metadata fetch in-flight so
+    /// `cancel_one` can fire the metadata cancel token and observe the
+    /// `BridgeError::Cancelled` branch in `spawn_enumeration_task`.
+    /// When `None`, the fake resolves immediately (matching previous
+    /// behaviour so legacy tests stay green).
+    metadata_resolve_dwell: Option<Duration>,
+    /// UC 27: counts the number of `enumerate_playlist_cancellable` calls
+    /// the fake has observed. Used by re-spawn tests to verify that
+    /// startup recovery / Restart paths re-issue enumeration.
+    enumeration_calls: u64,
 }
 
 #[derive(Clone)]
@@ -299,6 +348,110 @@ impl BridgeOps for FakeBridge {
         });
         (rx, handle)
     }
+
+    // UC 27 ----------------------------------------------------------------
+
+    fn enumerate_playlist_cancellable(
+        &self,
+        _url: &str,
+        _cookies_browser: Option<&str>,
+        _js_runtime_path: Option<&std::path::Path>,
+        _ffmpeg_path: Option<&std::path::Path>,
+        cancel: Arc<Notify>,
+    ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<EnumerationOutcome>> + Send {
+        let behavior = self.behavior.clone();
+        async move {
+            // Apply the configured dwell (if any) while honouring cancel.
+            let (dwell, outcome) = {
+                let mut b = behavior.lock().await;
+                b.enumeration_calls += 1;
+                let outcome = if !b.enumeration_outcomes.is_empty() {
+                    Some(b.enumeration_outcomes.remove(0))
+                } else if !b.playlist_entries.is_empty() {
+                    Some(EnumerationFakeOutcome::Playlist(b.playlist_entries.clone()))
+                } else {
+                    None
+                };
+                (b.enumeration_dwell, outcome)
+            };
+            if let Some(d) = dwell {
+                tokio::select! {
+                    () = tokio::time::sleep(d) => {}
+                    () = cancel.notified() => {
+                        return Err(BridgeError::Cancelled);
+                    }
+                }
+            }
+            match outcome {
+                Some(EnumerationFakeOutcome::SingleVideo) | None => {
+                    Ok(EnumerationOutcome::SingleVideo)
+                }
+                Some(EnumerationFakeOutcome::Playlist(entries)) => {
+                    Ok(EnumerationOutcome::Playlist(entries))
+                }
+                Some(EnumerationFakeOutcome::AuthRequired { stderr_tail }) => {
+                    Err(BridgeError::AuthRequired { stderr_tail })
+                }
+                Some(EnumerationFakeOutcome::Error(msg)) => Err(BridgeError::ExitedWithError {
+                    code: Some(1),
+                    stderr_tail: msg.to_string(),
+                }),
+            }
+        }
+    }
+
+    fn fetch_metadata_cancellable(
+        &self,
+        _url: &str,
+        _cookies_browser: Option<&str>,
+        _js_runtime_path: Option<&std::path::Path>,
+        _ffmpeg_path: Option<&std::path::Path>,
+        cancel: Arc<Notify>,
+    ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<VideoMetadata>> + Send {
+        let behavior = self.behavior.clone();
+        async move {
+            let (dwell, outcome) = {
+                let mut b = behavior.lock().await;
+                let outcome = if b.metadata_outcomes.is_empty() {
+                    None
+                } else {
+                    Some(b.metadata_outcomes.remove(0))
+                };
+                (b.metadata_resolve_dwell, outcome)
+            };
+            if let Some(d) = dwell {
+                tokio::select! {
+                    () = tokio::time::sleep(d) => {}
+                    () = cancel.notified() => {
+                        return Err(BridgeError::Cancelled);
+                    }
+                }
+            }
+            match outcome {
+                Some(MetadataFakeOutcome::Ok(m)) => Ok(m),
+                Some(MetadataFakeOutcome::AuthRequired { stderr_tail }) => {
+                    Err(BridgeError::AuthRequired { stderr_tail })
+                }
+                Some(MetadataFakeOutcome::Error(msg)) => Err(BridgeError::ExitedWithError {
+                    code: Some(1),
+                    stderr_tail: msg.to_string(),
+                }),
+                None => Ok(VideoMetadata {
+                    title: Some("Real Title".to_string()),
+                    thumbnail: None,
+                    duration_s: None,
+                }),
+            }
+        }
+    }
+}
+
+impl FakeBridge {
+    /// UC 27: snapshot of how many `enumerate_playlist_cancellable` calls
+    /// the fake has observed across this run.
+    async fn enumeration_calls(&self) -> u64 {
+        self.behavior.lock().await.enumeration_calls
+    }
 }
 
 struct TestEnv {
@@ -423,6 +576,10 @@ async fn add_url_duplicate_returns_duplicate_url_error() {
 
 #[tokio::test]
 async fn add_url_playlist_inserts_n_rows() {
+    // UC 27 contract: `add_url` returns immediately with count: 1 (the
+    // placeholder); enumeration replaces the placeholder with N video rows
+    // asynchronously. Test waits for that replacement, then asserts the
+    // final shape of the queue.
     let entries = vec![
         PlaylistEntry {
             url: "https://example.com/p1".into(),
@@ -453,21 +610,31 @@ async fn add_url_playlist_inserts_n_rows() {
         .add_url("https://example.com/playlist".to_string(), None)
         .await
         .expect("add_url");
-    assert!(matches!(outcome, AddOutcome::Inserted { count: 3 }));
+    assert!(
+        matches!(outcome, AddOutcome::Inserted { count: 1 }),
+        "UC 27: add_url returns synchronously with count: 1 (placeholder)"
+    );
 
-    // Allow the title-fetch task for the entry with no title to run.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let rows = env.manager.list_ui_rows().await.unwrap();
-    let urls: Vec<String> = rows.iter().map(|r| r.url.clone()).collect();
-    assert_eq!(urls.len(), 3);
-    assert!(urls.iter().any(|u| u == "https://example.com/p1"));
-    assert!(urls.iter().any(|u| u == "https://example.com/p2"));
-    assert!(urls.iter().any(|u| u == "https://example.com/p3"));
+    // Wait for the replacement transaction to land.
+    let mut final_urls: Vec<String> = Vec::new();
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let rows = env.manager.list_ui_rows().await.unwrap();
+        if rows.len() == 3 {
+            final_urls = rows.iter().map(|r| r.url.clone()).collect();
+            break;
+        }
+    }
+    assert_eq!(final_urls.len(), 3, "playlist must resolve into 3 rows");
+    assert!(final_urls.iter().any(|u| u == "https://example.com/p1"));
+    assert!(final_urls.iter().any(|u| u == "https://example.com/p2"));
+    assert!(final_urls.iter().any(|u| u == "https://example.com/p3"));
 }
 
 #[tokio::test]
 async fn playlist_skips_duplicates_within_run() {
+    // UC 27: `replace_placeholder_with_children` uses INSERT OR IGNORE so
+    // duplicate URLs within one enumeration collapse to one row.
     let entries = vec![
         PlaylistEntry {
             url: "https://example.com/x".into(),
@@ -493,23 +660,66 @@ async fn playlist_skips_duplicates_within_run() {
         .await
         .expect("add_url");
     assert!(matches!(outcome, AddOutcome::Inserted { count: 1 }));
+    // After enumeration: exactly one https://example.com/x row exists.
+    let mut x_count = 0;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let rows = env.manager.list_ui_rows().await.unwrap();
+        x_count = rows
+            .iter()
+            .filter(|r| r.url == "https://example.com/x")
+            .count();
+        if x_count > 0 {
+            break;
+        }
+    }
+    assert_eq!(x_count, 1, "duplicate URL within playlist must collapse");
 }
 
 #[tokio::test]
-async fn add_url_propagates_bridge_error_on_expansion_failure() {
+async fn add_url_surfaces_enumeration_error_on_row_not_as_add_error() {
+    // UC 27 contract change: enumeration / metadata errors no longer fail
+    // `add_url` synchronously — the placeholder is inserted first and the
+    // error is surfaced on the row's `title_error`. `add_url` only fails
+    // synchronously for DB / duplicate conditions.
     let env = setup(
         FakeBehavior {
-            expand_error: Some("boom"),
+            enumeration_outcomes: vec![EnumerationFakeOutcome::Error("boom")],
             ..Default::default()
         },
         1,
     );
-    let err = env
+    let outcome = env
         .manager
         .add_url("https://example.com/x".to_string(), None)
         .await
-        .expect_err("expand_playlist failure must surface");
-    assert!(matches!(err, AddError::Bridge(_)));
+        .expect("add_url succeeds synchronously even when enumeration will fail");
+    assert!(matches!(outcome, AddOutcome::Inserted { count: 1 }));
+
+    // Wait for the row to land in `title_status = error` with the message.
+    let mut title_error_seen = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let row = env
+            .db
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/x"))
+            .unwrap()
+            .expect("placeholder row exists");
+        if matches!(row.title_status, TitleStatus::Error)
+            && row
+                .title_error
+                .as_deref()
+                .is_some_and(|m| m.contains("boom"))
+        {
+            title_error_seen = true;
+            break;
+        }
+    }
+    assert!(
+        title_error_seen,
+        "placeholder row must transition to title_status = error with the bridge message"
+    );
+    drain_ui(&env.ui_rx).await;
 }
 
 #[tokio::test]
@@ -793,15 +1003,25 @@ async fn add_url_playlist_threads_audio_only_override_to_every_entry() {
         .await
         .expect("add_url");
 
-    let items = env
-        .db
-        .with_conn(crate::db::queue::list_all)
-        .expect("list_all");
+    // UC 27: playlist expansion is now asynchronous — wait for the
+    // replace_placeholder_with_children transaction to land before
+    // asserting on the per-child rows.
     let entry_urls = [
         "https://example.com/pl-a",
         "https://example.com/pl-b",
         "https://example.com/pl-c",
     ];
+    let mut items = Vec::new();
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        items = env
+            .db
+            .with_conn(crate::db::queue::list_all)
+            .expect("list_all");
+        if entry_urls.iter().all(|u| items.iter().any(|i| i.url == *u)) {
+            break;
+        }
+    }
     for url in entry_urls {
         let row = items
             .iter()
@@ -1164,6 +1384,8 @@ async fn requeue_pending_title_fetches_walks_pending_rows() {
                     title_status: crate::model::TitleStatus::Pending,
                     format_pref: FormatPref::BestHeuristic,
                     dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Video,
+                    display_order: 0,
                 },
             )
         })
@@ -1189,9 +1411,15 @@ async fn requeue_pending_title_fetches_walks_pending_rows() {
 
 #[tokio::test]
 async fn fetch_title_error_records_title_error() {
+    // UC 27: single-video Add routes through
+    // `enumerate_playlist_cancellable` → `promote_placeholder_to_video` →
+    // `fetch_metadata_cancellable`. A metadata-stage error is surfaced as
+    // a row-level `title_error` with `title_status = Error`. We inject via
+    // `metadata_outcomes` (the new pipeline) rather than the legacy
+    // `fetch_error` field which the single-video Add path no longer hits.
     let env = setup(
         FakeBehavior {
-            fetch_error: Some("title fetch boom"),
+            metadata_outcomes: vec![MetadataFakeOutcome::Error("title fetch boom")],
             ..Default::default()
         },
         1,
@@ -1200,15 +1428,31 @@ async fn fetch_title_error_records_title_error() {
         .add_url("https://example.com/no-title".to_string(), None)
         .await
         .expect("add");
-    tokio::time::sleep(Duration::from_millis(80)).await;
-
-    let item = env
-        .db
-        .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/no-title"))
-        .unwrap()
-        .expect("row exists");
-    assert_eq!(item.title_status, crate::model::TitleStatus::Error);
-    assert!(item.title_error.is_some(), "error tail captured");
+    // Poll until the metadata-error path lands the row at (Error,
+    // title_error). 2 s budget covers slow CI process startup.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let row = env
+            .db
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/no-title"))
+            .unwrap()
+            .expect("row exists");
+        if matches!(row.title_status, crate::model::TitleStatus::Error)
+            && row
+                .title_error
+                .as_deref()
+                .is_some_and(|m| m.contains("title fetch boom"))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() <= deadline,
+            "title_status never reached Error (current = {:?}, title_error = {:?})",
+            row.title_status,
+            row.title_error
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 
     env.bridge.release_one();
     tokio::time::sleep(Duration::from_millis(120)).await;
@@ -1219,28 +1463,58 @@ async fn fetch_title_error_records_title_error() {
 
 #[tokio::test]
 async fn add_url_returns_auth_required_when_expand_hits_bot_check() {
-    // AC#1, AC#2, AC#3: a bot-check during metadata fetch surfaces as a typed
-    // BridgeError::AuthRequired bubbled up via AddError::Bridge.
-    let env = setup(
+    // UC 27 contract: a bot-check during enumeration no longer fails
+    // `add_url` synchronously. Instead `handle_placeholder_auth_required`
+    // emits `ShowBotCheckDialog` and writes a row-level title_error so the
+    // user's Restart click resumes after they pick a cookies source.
+    let env = setup_full(
         FakeBehavior {
-            expand_outcomes: vec![ExpandOutcome::AuthRequired {
+            enumeration_outcomes: vec![EnumerationFakeOutcome::AuthRequired {
                 stderr_tail: "Sign in to confirm you're not a bot".to_string(),
             }],
             ..Default::default()
         },
         1,
+        vec![Browser::Firefox],
+        None,
     );
 
-    let err = env
+    let outcome = env
         .manager
         .add_url("https://www.youtube.com/watch?v=test".to_string(), None)
         .await
-        .expect_err("expand_playlist AuthRequired must surface");
+        .expect("add_url succeeds synchronously; auth surfaces on the row");
+    assert!(matches!(outcome, AddOutcome::Inserted { count: 1 }));
 
-    match err {
-        AddError::Bridge(BridgeError::AuthRequired { .. }) => {}
-        other => panic!("expected AddError::Bridge(AuthRequired), got {other:?}"),
+    // ShowBotCheckDialog must be emitted.
+    let mut dialog_seen = false;
+    let mut row_title_error = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let mut rx = env.ui_rx.lock().await;
+        while let Ok(evt) = rx.try_recv() {
+            if matches!(evt, UiEvent::ShowBotCheckDialog { .. }) {
+                dialog_seen = true;
+            }
+        }
+        drop(rx);
+        let row = env
+            .db
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://www.youtube.com/watch?v=test"))
+            .unwrap()
+            .expect("placeholder exists");
+        if matches!(row.title_status, TitleStatus::Error) && row.title_error.is_some() {
+            row_title_error = true;
+        }
+        if dialog_seen && row_title_error {
+            break;
+        }
     }
+    assert!(dialog_seen, "ShowBotCheckDialog must be emitted");
+    assert!(
+        row_title_error,
+        "placeholder row must carry a title_error after auth-required during enumeration"
+    );
 }
 
 #[tokio::test]
@@ -1668,6 +1942,8 @@ async fn cancel_one_on_queued_flips_to_cancelled_without_starting_download() {
                     title_status: crate::model::TitleStatus::Ok,
                     format_pref: yt_dlp_bridge::FormatPref::BestHeuristic,
                     dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Video,
+                    display_order: 0,
                 },
             )
         })
@@ -1745,11 +2021,20 @@ async fn cancel_one_during_title_fetch_resets_title_status_to_pending() {
     // AC#4: cancelling a row whose `title_status = fetching` must kill the
     // metadata subprocess immediately and reset title_status to pending so
     // a future Restart re-issues the fetch cleanly.
+    //
+    // UC 27 routes single-video Adds through
+    // `fetch_metadata_cancellable`, so the dwell that holds the title
+    // fetch in-flight is `metadata_resolve_dwell` (delays the happy
+    // path) — `metadata_cancel_dwell` only gates the legacy
+    // `fetch_title_cancellable` mock which is no longer on the
+    // single-video Add path.
     let env = setup(
         FakeBehavior {
-            // Set a long dwell so cancel_one fires WHILE the cancellable
-            // title fetch is parked inside the fake.
-            metadata_cancel_dwell: Some(Duration::from_secs(5)),
+            // Park the metadata fetch long enough for cancel_one to fire
+            // WHILE it is resolving so the `BridgeError::Cancelled`
+            // branch in `spawn_enumeration_task` is the one that
+            // observes the cancel.
+            metadata_resolve_dwell: Some(Duration::from_secs(5)),
             ..Default::default()
         },
         0,
@@ -1815,9 +2100,18 @@ async fn cancel_one_on_in_flight_with_title_fetching_fires_both_tokens() {
     // Challenger flag A: a row that is BOTH in_flight (download spawned)
     // AND title_status = fetching (slow title fetch still resolving) must
     // have BOTH cancel tokens fired and land in `cancelled`.
+    //
+    // UC 27 reaches the `(InFlight, Fetching)` window via:
+    //   enumerate_playlist_cancellable (SingleVideo)
+    //   → promote_placeholder_to_video (row becomes auto-promotable)
+    //   → fetch_metadata_cancellable  ← parked here
+    // While the metadata fetch is parked, the queue runner can
+    // auto-promote the row to InFlight. We use `metadata_resolve_dwell`
+    // (delays the happy path) rather than `metadata_cancel_dwell`
+    // (which only gates the legacy `fetch_title_cancellable` mock).
     let env = setup(
         FakeBehavior {
-            metadata_cancel_dwell: Some(Duration::from_secs(5)),
+            metadata_resolve_dwell: Some(Duration::from_secs(5)),
             ..Default::default()
         },
         1,
@@ -1898,6 +2192,8 @@ async fn cancel_all_transitions_mixed_queue_and_skips_terminal_rows() {
                         title_status: crate::model::TitleStatus::Ok,
                         format_pref: yt_dlp_bridge::FormatPref::BestHeuristic,
                         dest_dir: PathBuf::from("/tmp"),
+                        kind: PlaceholderKind::Video,
+                        display_order: 0,
                     },
                 )
             })
@@ -1953,6 +2249,8 @@ async fn cancel_one_on_cancelling_row_is_a_noop() {
                     title_status: crate::model::TitleStatus::Ok,
                     format_pref: yt_dlp_bridge::FormatPref::BestHeuristic,
                     dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Video,
+                    display_order: 0,
                 },
             )
         })
@@ -2061,6 +2359,8 @@ async fn remove_one_on_cancelled_row_with_partial_file_deletes_file_and_row() {
                     title_status: crate::model::TitleStatus::Ok,
                     format_pref: yt_dlp_bridge::FormatPref::BestHeuristic,
                     dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Video,
+                    display_order: 0,
                 },
             )
         })
@@ -2151,6 +2451,8 @@ async fn restart_one_on_cancelled_row_clears_progress_and_re_promotes() {
                     title_status: crate::model::TitleStatus::Ok,
                     format_pref: yt_dlp_bridge::FormatPref::BestHeuristic,
                     dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Video,
+                    display_order: 0,
                 },
             )
         })
@@ -2304,6 +2606,8 @@ async fn cancel_followed_by_runner_wake_lands_at_cancelled_terminal() {
                     title_status: crate::model::TitleStatus::Ok,
                     format_pref: yt_dlp_bridge::FormatPref::BestHeuristic,
                     dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Video,
+                    display_order: 0,
                 },
             )
         })
@@ -2369,6 +2673,8 @@ fn seed_row_with_status(
                     title_status: crate::model::TitleStatus::Ok,
                     format_pref: yt_dlp_bridge::FormatPref::BestHeuristic,
                     dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Video,
+                    display_order: 0,
                 },
             )
         })
@@ -2999,5 +3305,575 @@ async fn remove_all_cascades_history_for_done_rows() {
         "history rows for deleted done queue items must be pruned (FK cascade compatibility)"
     );
 
+    drain_ui(&env.ui_rx).await;
+}
+
+// ============================ UC 27 =====================================
+//
+// Tests covering the optimistic-placeholder add path introduced by UC 27.
+// Each test exercises one slice of the public manager surface:
+// - `add_url` synchronous-return budget (AC #1)
+// - SingleVideo enumeration outcome → promote + fetch_metadata + wake
+// - Playlist enumeration outcome → atomic replacement
+// - Concurrent overlapping URLs → INSERT OR IGNORE collision recovery
+// - Cancel during enumeration → Cancelled without tainting title_error
+// - Enumeration error → placeholder stays kind = 'pending' with title_error
+// - `start_one` on a placeholder → latches start_requested + RowUpserted
+// - `restart_one` on a cancelled placeholder → re-spawns enumeration
+// - `start_all` on a failed placeholder → re-spawns enumeration
+
+#[tokio::test]
+async fn add_url_returns_within_ac1_budget() {
+    // AC #1 — `add_url` returns synchronously well under the <100 ms budget
+    // even when enumeration is slow. The fake bridge sleeps 2 s on
+    // `enumerate_playlist_cancellable`; `add_url` must come back from
+    // `await` in well under 50 ms (the proposal's budget) because the
+    // critical path is one DB insert + one UI emit + a tokio::spawn().
+    let env = setup(
+        FakeBehavior {
+            enumeration_dwell: Some(Duration::from_secs(2)),
+            ..Default::default()
+        },
+        1,
+    );
+
+    let start = std::time::Instant::now();
+    let outcome = env
+        .manager
+        .add_url("https://example.com/slow".to_string(), None)
+        .await
+        .expect("add_url");
+    let elapsed = start.elapsed();
+
+    assert!(matches!(outcome, AddOutcome::Inserted { count: 1 }));
+    assert!(
+        elapsed < Duration::from_millis(50),
+        "add_url must return < 50 ms even with a 2 s enumeration dwell (got {elapsed:?})"
+    );
+
+    // Placeholder row exists in the DB the instant add_url returns.
+    let row = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/slow"))
+        .unwrap()
+        .expect("placeholder row exists immediately");
+    assert_eq!(row.kind, PlaceholderKind::Pending);
+    assert_eq!(row.status, QueueStatus::Queued);
+    assert_eq!(row.title_status, TitleStatus::Fetching);
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn single_video_outcome_promotes_placeholder_and_fills_metadata() {
+    // SingleVideo enumeration: the placeholder is flipped to kind = 'video'
+    // and the follow-up fetch_metadata call writes the title. The queue
+    // runner wakes and the row becomes in_flight under the cap.
+    let env = setup(FakeBehavior::default(), 1);
+    env.manager
+        .add_url("https://example.com/sv".to_string(), None)
+        .await
+        .expect("add_url");
+
+    let mut promoted_with_title = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let row = env
+            .db
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/sv"))
+            .unwrap()
+            .expect("row exists");
+        if matches!(row.kind, PlaceholderKind::Video) && row.title.as_deref() == Some("Real Title")
+        {
+            promoted_with_title = true;
+            break;
+        }
+    }
+    assert!(
+        promoted_with_title,
+        "placeholder must promote to kind = 'video' and fetch_metadata must fill title"
+    );
+
+    // Allow the spawned download to take the slot, then release to cleanup.
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    env.bridge.release_one();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn playlist_outcome_runs_atomic_replacement() {
+    // Playlist enumeration: the placeholder is deleted in the same
+    // transaction that inserts the N children. After the replacement, the
+    // placeholder URL is gone from the queue and every child URL is present.
+    let entries = vec![
+        PlaylistEntry {
+            url: "https://example.com/pl-1".into(),
+            title: Some("a".into()),
+            thumbnail: None,
+        },
+        PlaylistEntry {
+            url: "https://example.com/pl-2".into(),
+            title: Some("b".into()),
+            thumbnail: None,
+        },
+    ];
+    let env = setup(
+        FakeBehavior {
+            playlist_entries: entries,
+            ..Default::default()
+        },
+        1,
+    );
+
+    env.manager
+        .add_url("https://example.com/playlist-atomic".to_string(), None)
+        .await
+        .expect("add_url");
+
+    let mut final_rows: Vec<String> = Vec::new();
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let rows = env.manager.list_ui_rows().await.unwrap();
+        if rows.len() == 2 {
+            final_rows = rows.iter().map(|r| r.url.clone()).collect();
+            break;
+        }
+    }
+    assert_eq!(final_rows.len(), 2);
+    assert!(final_rows.contains(&"https://example.com/pl-1".to_string()));
+    assert!(final_rows.contains(&"https://example.com/pl-2".to_string()));
+    assert!(
+        !final_rows.contains(&"https://example.com/playlist-atomic".to_string()),
+        "placeholder row gone after replacement"
+    );
+
+    // Release the in-flight downloads spawned for the children.
+    for _ in 0..final_rows.len() {
+        env.bridge.release_one();
+    }
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn playlist_collision_with_preexisting_row_inserts_only_new_entries() {
+    // INSERT OR IGNORE collision recovery via the manager: a playlist whose
+    // entries include a URL already in the queue lands cleanly — the
+    // pre-existing row is left in place, the fresh URL is inserted, and the
+    // placeholder is removed. No transaction abort, no row loss.
+    let env = setup(
+        FakeBehavior {
+            enumeration_outcomes: vec![
+                EnumerationFakeOutcome::SingleVideo, // for the seed add
+                EnumerationFakeOutcome::Playlist(vec![
+                    PlaylistEntry {
+                        url: "https://example.com/dup".into(),
+                        title: Some("dup".into()),
+                        thumbnail: None,
+                    },
+                    PlaylistEntry {
+                        url: "https://example.com/new".into(),
+                        title: Some("new".into()),
+                        thumbnail: None,
+                    },
+                ]),
+            ],
+            ..Default::default()
+        },
+        1,
+    );
+
+    // Pre-seed: a single-video row whose URL will collide with the playlist.
+    env.manager
+        .add_url("https://example.com/dup".to_string(), None)
+        .await
+        .expect("seed add");
+    // Wait for the seed to promote past the placeholder stage.
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let row = env
+            .db
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/dup"))
+            .unwrap()
+            .expect("seed row");
+        if matches!(row.kind, PlaceholderKind::Video) {
+            break;
+        }
+    }
+
+    // Playlist add — overlaps with the seed.
+    env.manager
+        .add_url("https://example.com/pl-collide".to_string(), None)
+        .await
+        .expect("playlist add");
+
+    // Wait for the placeholder to be replaced.
+    let mut converged = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let urls: Vec<String> = env
+            .manager
+            .list_ui_rows()
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.url.clone())
+            .collect();
+        let has_dup = urls.iter().any(|u| u == "https://example.com/dup");
+        let has_new = urls.iter().any(|u| u == "https://example.com/new");
+        let has_placeholder = urls.iter().any(|u| u == "https://example.com/pl-collide");
+        if has_dup && has_new && !has_placeholder {
+            converged = true;
+            break;
+        }
+    }
+    assert!(
+        converged,
+        "post-replacement queue must contain dup + new and exclude the placeholder URL"
+    );
+
+    // Release any held downloads.
+    for _ in 0..4 {
+        env.bridge.release_one();
+    }
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn cancel_during_enumeration_lands_cancelled_without_title_error() {
+    // Cancel fired while the placeholder is mid-enumeration: row flips to
+    // Cancelled, title_error stays unset (cancel must never taint
+    // title_error per the dev's note + cancel_one's branch contract).
+    let env = setup(
+        FakeBehavior {
+            enumeration_dwell: Some(Duration::from_secs(2)),
+            ..Default::default()
+        },
+        1,
+    );
+    env.manager
+        .add_url("https://example.com/cancel-enum".to_string(), None)
+        .await
+        .expect("add");
+
+    // Give enumeration time to register its cancel token.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let id = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/cancel-enum"))
+        .unwrap()
+        .unwrap()
+        .id;
+
+    env.manager.cancel_one(id).await;
+
+    let mut landed = false;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let row = env
+            .db
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/cancel-enum"))
+            .unwrap()
+            .unwrap();
+        if matches!(row.status, QueueStatus::Cancelled) {
+            assert!(
+                row.title_error.is_none(),
+                "cancel must not taint title_error (got {:?})",
+                row.title_error
+            );
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "row must transition to Cancelled within bound");
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn enumeration_error_leaves_placeholder_in_pending_kind_with_title_error() {
+    // The placeholder must stay kind = 'pending' on error so the UI's
+    // Restart affordance re-spawns enumeration. `title_status = error`
+    // with the bridge's message in `title_error`.
+    let env = setup(
+        FakeBehavior {
+            enumeration_outcomes: vec![EnumerationFakeOutcome::Error("nope")],
+            ..Default::default()
+        },
+        1,
+    );
+    env.manager
+        .add_url("https://example.com/enum-err".to_string(), None)
+        .await
+        .expect("add");
+
+    let mut errored = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let row = env
+            .db
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/enum-err"))
+            .unwrap()
+            .unwrap();
+        if matches!(row.title_status, TitleStatus::Error) {
+            assert_eq!(
+                row.kind,
+                PlaceholderKind::Pending,
+                "row must remain pending on enumeration error"
+            );
+            assert!(
+                row.title_error
+                    .as_deref()
+                    .is_some_and(|s| s.contains("nope")),
+                "title_error must surface the bridge stderr (got {:?})",
+                row.title_error
+            );
+            errored = true;
+            break;
+        }
+    }
+    assert!(errored, "row must land in title_status = error");
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn start_one_on_placeholder_latches_start_requested_and_emits_row_upserted() {
+    // AC #12 — Start on a placeholder latches the intent without flipping
+    // the row to in_flight; the UI gets a RowUpserted carrying
+    // start_requested = true so it can swap to "Starting…".
+    let env = setup(
+        FakeBehavior {
+            // Keep enumeration in flight so the placeholder stays pending
+            // long enough for the test to observe start_requested before
+            // it auto-clears on promotion.
+            enumeration_dwell: Some(Duration::from_secs(2)),
+            ..Default::default()
+        },
+        1,
+    );
+    env.manager
+        .add_url("https://example.com/start-ph".to_string(), None)
+        .await
+        .expect("add");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let id = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/start-ph"))
+        .unwrap()
+        .unwrap()
+        .id;
+
+    env.manager.start_one(id).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let row = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/start-ph"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.kind, PlaceholderKind::Pending, "row stays pending");
+    assert!(
+        row.start_requested,
+        "start_requested must be latched on a pending placeholder"
+    );
+
+    // RowUpserted with start_requested = true must have been emitted.
+    let mut saw_latched_upsert = false;
+    let mut rx = env.ui_rx.lock().await;
+    while let Ok(evt) = rx.try_recv() {
+        if let UiEvent::RowUpserted(row) = evt {
+            if row.id == id && row.start_requested {
+                saw_latched_upsert = true;
+            }
+        }
+    }
+    assert!(
+        saw_latched_upsert,
+        "RowUpserted with start_requested = true must be emitted after start_one"
+    );
+}
+
+#[tokio::test]
+async fn restart_one_on_cancelled_placeholder_respawns_enumeration() {
+    // UC 27: the placeholder restart path goes through
+    // `clear_for_restart_placeholder` and then re-issues
+    // `spawn_enumeration_task`. Verify the enumeration call count grows.
+    let env = setup(FakeBehavior::default(), 1);
+
+    // Seed a Cancelled placeholder directly so the test does not depend
+    // on the enumeration cancel timing.
+    let id = env
+        .db
+        .with_conn(|c| {
+            crate::db::queue::insert(
+                c,
+                crate::model::NewQueueItem {
+                    url: "https://example.com/restart-ph".to_string(),
+                    title: None,
+                    title_status: TitleStatus::Pending,
+                    format_pref: FormatPref::BestHeuristic,
+                    dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Pending,
+                    display_order: 0,
+                },
+            )
+        })
+        .unwrap();
+    env.db
+        .with_conn(|c| crate::db::queue::update_status(c, id, QueueStatus::Cancelled))
+        .unwrap();
+
+    let calls_before = env.bridge.enumeration_calls().await;
+    env.manager.restart_one(id).await.expect("restart_one");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let calls_after = env.bridge.enumeration_calls().await;
+    assert!(
+        calls_after > calls_before,
+        "restart on cancelled placeholder must re-spawn enumeration ({calls_before} -> {calls_after})"
+    );
+    // After re-enumeration completes the placeholder promotes to a video row.
+    let row = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url_by_id_internal(c, id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.kind, PlaceholderKind::Video);
+
+    env.bridge.release_one();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn start_all_respawns_enumeration_for_failed_placeholders() {
+    // `start_all`'s UC 27 widening picks up placeholders with
+    // `title_status = Error` and re-spawns their enumeration task.
+    let env = setup(FakeBehavior::default(), 1);
+
+    // Seed an errored placeholder directly.
+    let id = env
+        .db
+        .with_conn(|c| {
+            crate::db::queue::insert(
+                c,
+                crate::model::NewQueueItem {
+                    url: "https://example.com/start-all-ph".to_string(),
+                    title: None,
+                    title_status: TitleStatus::Error,
+                    format_pref: FormatPref::BestHeuristic,
+                    dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Pending,
+                    display_order: 0,
+                },
+            )
+        })
+        .unwrap();
+    // set_title_error to make the row's title_status = error explicitly
+    // (the insert path uses 'pending', so flip via the DAO).
+    env.db
+        .with_conn(|c| crate::db::queue::set_title_error(c, id, "previous failure"))
+        .unwrap();
+
+    let calls_before = env.bridge.enumeration_calls().await;
+    env.manager.start_all().await.expect("start_all");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let calls_after = env.bridge.enumeration_calls().await;
+    assert!(
+        calls_after > calls_before,
+        "start_all must re-spawn enumeration for failed placeholders ({calls_before} -> {calls_after})"
+    );
+
+    env.bridge.release_one();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn requeue_pending_enumerations_walks_pending_rows() {
+    // Startup recovery: rows whose enumeration didn't complete before the
+    // previous shutdown are picked up by `requeue_pending_enumerations`.
+    let env = setup(FakeBehavior::default(), 1);
+
+    let id = env
+        .db
+        .with_conn(|c| {
+            crate::db::queue::insert(
+                c,
+                crate::model::NewQueueItem {
+                    url: "https://example.com/recover-ph".to_string(),
+                    title: None,
+                    title_status: TitleStatus::Pending,
+                    format_pref: FormatPref::BestHeuristic,
+                    dest_dir: PathBuf::from("/tmp"),
+                    kind: PlaceholderKind::Pending,
+                    display_order: 0,
+                },
+            )
+        })
+        .unwrap();
+
+    let calls_before = env.bridge.enumeration_calls().await;
+    env.manager
+        .requeue_pending_enumerations()
+        .await
+        .expect("requeue_pending_enumerations");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let calls_after = env.bridge.enumeration_calls().await;
+    assert!(
+        calls_after > calls_before,
+        "requeue must re-spawn enumeration ({calls_before} -> {calls_after})"
+    );
+
+    // After enumeration completes the placeholder should promote.
+    let row = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url_by_id_internal(c, id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.kind, PlaceholderKind::Video);
+
+    env.bridge.release_one();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    drain_ui(&env.ui_rx).await;
+}
+
+#[tokio::test]
+async fn display_order_increases_across_adds() {
+    // Each Add gets a strictly higher display_order than the previous one
+    // (per-process AtomicU64 stride). This is the sort key the UI relies
+    // on for placement.
+    let env = setup(FakeBehavior::default(), 1);
+    env.manager
+        .add_url("https://example.com/o1".to_string(), None)
+        .await
+        .expect("o1");
+    env.manager
+        .add_url("https://example.com/o2".to_string(), None)
+        .await
+        .expect("o2");
+    env.manager
+        .add_url("https://example.com/o3".to_string(), None)
+        .await
+        .expect("o3");
+
+    let rows = env
+        .db
+        .with_conn(crate::db::queue::list_all)
+        .expect("list_all");
+    let o1 = rows.iter().find(|r| r.url.ends_with("/o1")).unwrap();
+    let o2 = rows.iter().find(|r| r.url.ends_with("/o2")).unwrap();
+    let o3 = rows.iter().find(|r| r.url.ends_with("/o3")).unwrap();
+    assert!(
+        o1.display_order < o2.display_order && o2.display_order < o3.display_order,
+        "display_order must increase per Add (got {} < {} < {})",
+        o1.display_order,
+        o2.display_order,
+        o3.display_order
+    );
+
+    for _ in 0..3 {
+        env.bridge.release_one();
+    }
+    tokio::time::sleep(Duration::from_millis(80)).await;
     drain_ui(&env.ui_rx).await;
 }

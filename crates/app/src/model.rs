@@ -110,6 +110,41 @@ impl TitleStatus {
     }
 }
 
+/// UC 27 discriminator. `Video` is the historical row kind — fully-known
+/// (or known-enough) video row. `Pending` is an optimistic placeholder
+/// inserted before enumeration resolves; the queue runner refuses to
+/// auto-promote it to `in_flight` even if `status = 'queued'`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceholderKind {
+    Video,
+    Pending,
+}
+
+impl PlaceholderKind {
+    /// Returns the snake-case string used in the `SQLite` `kind` column.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Video => "video",
+            Self::Pending => "pending",
+        }
+    }
+
+    /// Parses a snake-case kind string into a [`PlaceholderKind`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the offending string if it does not match a known variant.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "video" => Ok(Self::Video),
+            "pending" => Ok(Self::Pending),
+            other => Err(other.to_string()),
+        }
+    }
+}
+
 /// Settings snapshot taken at queue add-time. Stored on each row so that
 /// later changes to the global Settings do not retroactively affect items
 /// already in the queue (per UC 01 § Pitfalls — Edge case).
@@ -120,6 +155,12 @@ pub struct NewQueueItem {
     pub title_status: TitleStatus,
     pub format_pref: FormatPref,
     pub dest_dir: PathBuf,
+    /// UC 27. Defaults to `Video` for existing call sites; `add_url` sets
+    /// `Pending` for optimistic placeholder inserts.
+    pub kind: PlaceholderKind,
+    /// UC 27. Per-process monotonically-increasing sort key, allocated by
+    /// the download manager from an `AtomicU64` seeded at startup.
+    pub display_order: i64,
 }
 
 /// One row of the persistent queue.
@@ -153,6 +194,15 @@ pub struct QueueItem {
     /// stdout line; consumed on Remove to delete the partial file from
     /// disk. `None` until the bridge has emitted a `PartialFilePath` event.
     pub partial_file_path: Option<PathBuf>,
+    /// UC 27 row discriminator. `Pending` rows are skeleton placeholders
+    /// awaiting enumeration; they are never auto-promoted by the queue
+    /// runner.
+    pub kind: PlaceholderKind,
+    /// UC 27. Latched "user clicked Start while the placeholder was still
+    /// resolving" intent. Reset to false on promote / replace.
+    pub start_requested: bool,
+    /// UC 27 sort key. See [`NewQueueItem::display_order`].
+    pub display_order: i64,
 }
 
 /// Global app settings (read from the `settings` KV table).
@@ -192,6 +242,20 @@ pub struct UiQueueRow {
     /// fetcher. `None` until the fetcher succeeds — the row renders the
     /// gradient placeholder until then.
     pub thumbnail_path: Option<PathBuf>,
+    /// UC 27 row discriminator projected into the UI layer so the Slint
+    /// row template can branch on placeholder vs. video.
+    pub kind: PlaceholderKind,
+    /// UC 27. Latched "Start clicked on pending row" intent — disables the
+    /// Download button and swaps it for "Starting…".
+    pub start_requested: bool,
+    /// UC 27 sort key, mirrored into the UI so the queue's order matches
+    /// the DB's `ORDER BY display_order`.
+    pub display_order: i64,
+    /// UC 27. Unix epoch ms when the placeholder row was inserted (creation
+    /// time for `Pending` rows; for `Video` rows it's the row's creation
+    /// time too). Used by the 5-second "Still fetching info…" affordance
+    /// in `queue_row.slint` against a Slint global `current-now-ms`.
+    pub created_at_unix_ms: i64,
 }
 
 /// Splits a multi-line URL paste into trimmed, non-empty entries.

@@ -11,7 +11,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
 
@@ -20,14 +21,18 @@ use thiserror::Error;
 mod download_mgr_tests;
 use tokio::sync::{Mutex, Notify, Semaphore, mpsc, oneshot};
 use yt_dlp_bridge::{
-    BridgeError, DownloadEvent, DownloadRequest, FormatPref, PlaylistEntry, get_thumbnail_url,
-    get_title, get_title_cancellable,
+    BridgeError, DownloadEvent, DownloadRequest, EnumerationOutcome, FormatPref, PlaylistEntry,
+    VideoMetadata, enumerate_playlist_cancellable, fetch_metadata, get_thumbnail_url, get_title,
+    get_title_cancellable,
 };
 
 use crate::bot_check::{BotCheckCoordinator, CoordinatorOutcome, RetryDecision};
 use crate::browsers::Browser;
+use crate::db::queue::InsertedOrPreexisting;
 use crate::db::{Db, DbError, queue, settings};
-use crate::model::{NewQueueItem, QueueItem, QueueStatus, TitleStatus, UiQueueRow};
+use crate::model::{
+    NewQueueItem, PlaceholderKind, QueueItem, QueueStatus, TitleStatus, UiQueueRow,
+};
 use crate::paths;
 
 /// How long we let `yt-dlp --print %(title)s` run before timing out. Generous
@@ -42,6 +47,26 @@ const TITLE_TIMEOUT: Duration = Duration::from_secs(20);
 /// descriptors at startup (regression: fd-exhaustion crash observed when
 /// every row spawned a subprocess concurrently).
 const THUMBNAIL_RESOLVE_CONCURRENCY: usize = 4;
+
+/// UC 27. Maximum concurrent yt-dlp subprocesses dedicated to resolving
+/// placeholder enumeration / single-video metadata. Mirrors the thumbnail
+/// concurrency cap (same fd-exhaustion concern) but on its own semaphore so
+/// neither workload starves the other.
+const METADATA_RESOLVE_CONCURRENCY: usize = 4;
+
+/// UC 27. Per-Add display-order stride. Each placeholder Add advances the
+/// in-memory `AtomicU64` by this amount; playlist expansion allocates child
+/// rows inside the placeholder's reserved slot via a sub-stride
+/// (`STRIDE / (N+1)`) so children stay adjacent to the placeholder's
+/// original visual position. 2^20 leaves ~1M children of headroom per Add
+/// before consecutive placeholders' slots collide.
+const DISPLAY_ORDER_STRIDE: u64 = 1_048_576;
+
+/// UC 27. How long we let `yt-dlp --dump-single-json` and `--flat-playlist`
+/// run before timing out the placeholder's enumeration / metadata fetch.
+/// Mirrors [`TITLE_TIMEOUT`] (the cancellable get_title path) so the
+/// placeholder UX has the same wall-clock ceiling as today's title fetch.
+const METADATA_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Outcome of a successful `add_url`.
 #[derive(Debug, Clone)]
@@ -116,6 +141,28 @@ pub trait BridgeOps: Send + Sync + 'static {
         ffmpeg_path: Option<&Path>,
         cancel: Arc<Notify>,
     ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<String>> + Send;
+    /// UC 27. Cancellable playlist-vs-single-video probe. Mirrors
+    /// `expand_playlist` but explicitly returns an [`EnumerationOutcome`]
+    /// so the caller can branch on the single-video / playlist split
+    /// without re-checking entries.
+    fn enumerate_playlist_cancellable(
+        &self,
+        url: &str,
+        cookies_browser: Option<&str>,
+        js_runtime_path: Option<&Path>,
+        ffmpeg_path: Option<&Path>,
+        cancel: Arc<Notify>,
+    ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<EnumerationOutcome>> + Send;
+    /// UC 27. Cancellable single-video metadata fetch (title + thumbnail +
+    /// duration in one yt-dlp invocation).
+    fn fetch_metadata_cancellable(
+        &self,
+        url: &str,
+        cookies_browser: Option<&str>,
+        js_runtime_path: Option<&Path>,
+        ffmpeg_path: Option<&Path>,
+        cancel: Arc<Notify>,
+    ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<VideoMetadata>> + Send;
 }
 
 /// Real bridge wrapper holding the path to the `yt-dlp` binary.
@@ -240,6 +287,58 @@ impl BridgeOps for RealBridge {
             .await
         }
     }
+    fn enumerate_playlist_cancellable(
+        &self,
+        url: &str,
+        cookies_browser: Option<&str>,
+        js_runtime_path: Option<&Path>,
+        ffmpeg_path: Option<&Path>,
+        cancel: Arc<Notify>,
+    ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<EnumerationOutcome>> + Send {
+        let path = self.yt_dlp_path.clone();
+        let url = url.to_string();
+        let cookies = cookies_browser.map(str::to_string);
+        let js_runtime = js_runtime_path.map(Path::to_path_buf);
+        let ffmpeg = ffmpeg_path.map(Path::to_path_buf);
+        async move {
+            enumerate_playlist_cancellable(
+                &path,
+                &url,
+                METADATA_TIMEOUT,
+                cookies.as_deref(),
+                js_runtime.as_deref(),
+                ffmpeg.as_deref(),
+                cancel,
+            )
+            .await
+        }
+    }
+    fn fetch_metadata_cancellable(
+        &self,
+        url: &str,
+        cookies_browser: Option<&str>,
+        js_runtime_path: Option<&Path>,
+        ffmpeg_path: Option<&Path>,
+        cancel: Arc<Notify>,
+    ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<VideoMetadata>> + Send {
+        let path = self.yt_dlp_path.clone();
+        let url = url.to_string();
+        let cookies = cookies_browser.map(str::to_string);
+        let js_runtime = js_runtime_path.map(Path::to_path_buf);
+        let ffmpeg = ffmpeg_path.map(Path::to_path_buf);
+        async move {
+            fetch_metadata(
+                &path,
+                &url,
+                METADATA_TIMEOUT,
+                cookies.as_deref(),
+                js_runtime.as_deref(),
+                ffmpeg.as_deref(),
+                cancel,
+            )
+            .await
+        }
+    }
 }
 
 /// Internal supervisor terminal-state classification (UC 02). The supervisor
@@ -281,6 +380,16 @@ pub enum UiEvent {
     /// The UI bridge sets the row's `thumbnail-path` and `thumbnail-loaded`
     /// fields so the gradient placeholder crossfades to the real image.
     ThumbnailReady { id: i64, path: PathBuf },
+    /// UC 27. A placeholder row was replaced with N freshly-inserted
+    /// playlist children. The UI bridge removes the placeholder from the
+    /// Slint `VecModel` and inserts the children in playlist order. The
+    /// `children` vec carries ONLY rows that were newly inserted — any
+    /// pre-existing duplicates (URLs already in the queue) stay where they
+    /// were and are NOT re-emitted, so the UI does not see double rows.
+    RowReplacedWithChildren {
+        placeholder_id: i64,
+        children: Vec<UiQueueRow>,
+    },
 }
 
 /// Severity of a UI flash message.
@@ -328,6 +437,16 @@ pub struct DownloadManager<B: BridgeOps + Clone> {
     /// fans out N tokio tasks at startup and exhausts the process fd
     /// limit when N is large.
     thumbnail_resolve_semaphore: Arc<Semaphore>,
+    /// UC 27. Bounds concurrent yt-dlp subprocesses spawned for placeholder
+    /// enumeration / single-video metadata. Sized symmetrically with the
+    /// thumbnail-resolve semaphore so a 50-URL paste does not blow the
+    /// process fd budget.
+    metadata_resolve_semaphore: Arc<Semaphore>,
+    /// UC 27. Per-process monotonically-increasing source of
+    /// `display_order` values. Seeded at app startup from
+    /// `SELECT COALESCE(MAX(display_order), 0) + 1_048_576` so values never
+    /// collide with already-persisted rows.
+    display_order_seq: Arc<AtomicU64>,
 }
 
 impl<B: BridgeOps + Clone> DownloadManager<B> {
@@ -355,6 +474,17 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
         let cap = concurrency_cap.clamp(1, 10) as usize;
         let semaphore = Arc::new(Semaphore::new(cap));
         let thumbnail_resolve_semaphore = Arc::new(Semaphore::new(THUMBNAIL_RESOLVE_CONCURRENCY));
+        let metadata_resolve_semaphore = Arc::new(Semaphore::new(METADATA_RESOLVE_CONCURRENCY));
+        // UC 27: seed the per-process display-order counter from the DB so a
+        // restart never reuses a slot. `+ STRIDE` keeps the first new Add at
+        // least one full stride above the previous high-water mark.
+        let max_order = db
+            .with_conn(queue::max_display_order)
+            .ok()
+            .and_then(|v| u64::try_from(v).ok())
+            .unwrap_or(0);
+        let initial_seq = max_order.saturating_add(DISPLAY_ORDER_STRIDE);
+        let display_order_seq = Arc::new(AtomicU64::new(initial_seq));
         let (wake_tx, wake_rx) = mpsc::channel::<()>(16);
         let mgr = Self {
             db,
@@ -370,6 +500,8 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
             ffmpeg_path: Arc::new(ffmpeg_path),
             thumbnail_cache_dir: Arc::new(thumbnail_cache_dir),
             thumbnail_resolve_semaphore,
+            metadata_resolve_semaphore,
+            display_order_seq,
         };
         let runner = mgr.clone();
         tokio::spawn(async move {
@@ -392,22 +524,27 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
         (*self.detected_browsers).clone()
     }
 
-    /// Adds a URL to the queue, expanding playlists when applicable.
+    /// UC 27. Adds a URL to the queue as an optimistic placeholder.
     ///
-    /// Logic:
-    /// 1. Whole-URL dedup against the DB.
-    /// 2. Try `expand_playlist(url)`. Empty Vec → single-video path; insert
-    ///    one row with `title_status = pending` and spawn `get_title`.
-    /// 3. Non-empty Vec → for each entry, dedup-check; insert with
-    ///    `title_status = ok` (or `pending` if the entry's title is `None`,
-    ///    and we'll re-fetch via the startup path); skip duplicates silently
-    ///    within the playlist.
-    /// 4. Each row snapshots the current Settings (format + dest dir).
+    /// Flow:
+    /// 1. Whole-URL dedup against the DB — duplicates short-circuit before
+    ///    the placeholder insert so the same URL never lands twice.
+    /// 2. Snapshot the active Settings (format + dest dir) so a later
+    ///    Settings change does not retroactively re-target the row.
+    /// 3. Synchronously insert one `kind = 'pending'` placeholder row
+    ///    (status `queued`, `title_status = fetching`, dest-dir snapshot)
+    ///    and emit `RowUpserted`. The UI paints the skeleton in <100 ms.
+    /// 4. Spawn a tokio task ([`spawn_enumeration_task`]) that calls the
+    ///    bridge's `enumerate_playlist_cancellable` + `fetch_metadata`
+    ///    fast paths to resolve the placeholder. The Add call returns
+    ///    immediately with `AddOutcome::Inserted { count: 1 }`.
     ///
     /// # Errors
     ///
-    /// See [`AddError`] variants.
-    #[allow(clippy::too_many_lines)]
+    /// See [`AddError`] variants. Enumeration / metadata errors are surfaced
+    /// on the row itself (via `title_error`), not as `AddError::Bridge` —
+    /// the Add operation only fails synchronously for DB / duplicate
+    /// conditions.
     pub async fn add_url(
         &self,
         url: String,
@@ -423,24 +560,6 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
         if already_in_queue.is_some() {
             return Err(AddError::DuplicateUrl(url));
         }
-
-        let cookies_arg = self.read_cookies_arg().await?;
-        let js_runtime = self.js_runtime_path.as_ref().clone();
-        let ffmpeg = self.ffmpeg_path.as_ref().clone();
-
-        let entries = match self
-            .bridge
-            .expand_playlist(
-                &url,
-                cookies_arg.as_deref(),
-                js_runtime.as_deref(),
-                ffmpeg.as_deref(),
-            )
-            .await
-        {
-            Ok(entries) => entries,
-            Err(err) => return Err(AddError::Bridge(err)),
-        };
 
         // UC 16: snapshot the active destination at enqueue time. If neither
         // the per-OS Downloads dir nor the app-data dir resolves, refuse to
@@ -471,74 +590,68 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
             (format_override.unwrap_or(settings_format), dest_dir)
         };
 
-        if entries.is_empty() {
-            // Single-video path.
-            let new_item = NewQueueItem {
-                url: url.clone(),
-                title: None,
-                title_status: TitleStatus::Pending,
-                format_pref,
-                dest_dir: dest_dir.clone(),
-            };
-            let id = self.insert_item(new_item.clone()).await?;
-            self.emit_row_for(id).await;
-            self.spawn_title_fetch(id, url.clone());
-            // UC 08: resolve the upstream thumbnail URL via the bridge
-            // (single subprocess) BEFORE spawning the per-row fetch task.
-            // The fetch task itself never spawns yt-dlp.
-            self.spawn_thumbnail_fetch_for_single_video(id, url);
-            self.wake();
-            Ok(AddOutcome::Inserted { count: 1 })
-        } else {
-            // Playlist path.
-            let mut count = 0usize;
-            for entry in entries {
-                let entry_url = entry.url.clone();
-                let entry_thumbnail = entry.thumbnail.clone();
-                let already = {
-                    let db = self.db.clone();
-                    let q = entry_url.clone();
-                    tokio::task::spawn_blocking(move || db.with_conn(|c| queue::find_by_url(c, &q)))
-                        .await
-                        .map_err(|e| AddError::Db(DbError::Decode(format!("join error: {e}"))))??
-                };
-                if already.is_some() {
-                    continue;
-                }
-                let (title, title_status) = match entry.title {
-                    Some(t) => (Some(t), TitleStatus::Ok),
-                    None => (None, TitleStatus::Pending),
-                };
-                let new_item = NewQueueItem {
-                    url: entry_url.clone(),
-                    title,
-                    title_status,
-                    format_pref,
-                    dest_dir: dest_dir.clone(),
-                };
-                let id = self.insert_item(new_item).await?;
-                self.emit_row_for(id).await;
-                if matches!(title_status, TitleStatus::Pending) {
-                    self.spawn_title_fetch(id, entry_url.clone());
-                }
-                // UC 08: spawn a per-row HTTP fetch when the playlist entry
-                // already carries a thumbnail URL. Many extractors leave it
-                // `None` even with `--flat-playlist` — those rows fall back
-                // to the gradient placeholder until a future refresh.
-                if let Some(thumb_url) = entry_thumbnail {
-                    self.spawn_thumbnail_fetch(id, thumb_url);
-                }
-                count += 1;
-            }
-            self.wake();
-            Ok(AddOutcome::Inserted { count })
-        }
+        // UC 27: allocate a fresh display-order slot before the insert. The
+        // counter is per-process; concurrent Adds get strictly increasing
+        // values, matching the order they hit `add_url`.
+        let order_u64 = self
+            .display_order_seq
+            .fetch_add(DISPLAY_ORDER_STRIDE, Ordering::Relaxed);
+        let display_order = i64::try_from(order_u64).unwrap_or(i64::MAX);
+
+        let new_item = NewQueueItem {
+            url: url.clone(),
+            title: None,
+            // `title_status = fetching` so the row template renders the
+            // italic "Fetching…" header while the placeholder is alive.
+            title_status: TitleStatus::Fetching,
+            format_pref,
+            dest_dir: dest_dir.clone(),
+            kind: PlaceholderKind::Pending,
+            display_order,
+        };
+        let id = self.insert_item(new_item).await?;
+        self.emit_row_for(id).await;
+
+        // Spawn enumeration off the critical path so add_url returns
+        // before the yt-dlp subprocess runs.
+        self.spawn_enumeration_task(id, url, format_pref, dest_dir);
+
+        Ok(AddOutcome::Inserted { count: 1 })
     }
 
-    /// Wakes the queue-runner targeting one specific row id. The row's
-    /// `status = queued` precondition is checked by the runner itself; this
-    /// method is a no-op signal.
-    pub fn start_one(&self, _id: i64) {
+    /// Start one row.
+    ///
+    /// UC 27 widens this to handle `pending` placeholders: when the row's
+    /// kind is `pending` and its title is still resolving, the start intent
+    /// is latched (`start_requested = 1`) so the auto-promotion path picks
+    /// the row up the moment enumeration completes. For `video` kinds it
+    /// is a no-op signal — the runner re-checks the queue on every wake.
+    pub async fn start_one(&self, id: i64) {
+        let row = {
+            let db = self.db.clone();
+            tokio::task::spawn_blocking(move || {
+                db.with_conn(|c| queue::find_by_url_by_id_internal(c, id))
+            })
+            .await
+        };
+        let item = match row {
+            Ok(Ok(Some(r))) => r,
+            _ => {
+                self.wake();
+                return;
+            }
+        };
+        if matches!(item.kind, PlaceholderKind::Pending)
+            && matches!(item.title_status, TitleStatus::Fetching)
+        {
+            let _ = tokio::task::spawn_blocking({
+                let db = self.db.clone();
+                move || db.with_conn(|c| queue::set_start_requested(c, id, true))
+            })
+            .await;
+            emit_row(&self.db, &self.ui_tx, id).await;
+            return;
+        }
         self.wake();
     }
 
@@ -989,6 +1102,38 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
             tracing::warn!(id, "restart_one: row not found");
             return Ok(());
         };
+        // UC 27: a `pending` placeholder Restart re-spawns enumeration
+        // instead of waking the download runner. The row stays `pending`
+        // until enumeration resolves.
+        if matches!(item.kind, PlaceholderKind::Pending) {
+            // Pending-kind Restart applies in two cases: a Cancelled
+            // placeholder (user cancelled the metadata fetch) and an
+            // Errored placeholder (enumeration failed, bot-check, etc.).
+            if !matches!(item.status, QueueStatus::Cancelled | QueueStatus::Error)
+                && !matches!(item.title_status, TitleStatus::Error)
+            {
+                tracing::warn!(
+                    id,
+                    status = ?item.status,
+                    title_status = ?item.title_status,
+                    "restart_one: placeholder is not in a restartable state"
+                );
+                return Ok(());
+            }
+            let _ = tokio::task::spawn_blocking({
+                let db = self.db.clone();
+                move || db.with_conn(|c| queue::clear_for_restart_placeholder(c, id))
+            })
+            .await
+            .map_err(|e| DbError::Decode(format!("join error: {e}")))?;
+            // Re-spawn enumeration with the row's snapshotted settings.
+            let format_pref = item.format_pref;
+            let dest_dir = item.dest_dir.clone();
+            let url = item.url.clone();
+            self.spawn_enumeration_task(id, url, format_pref, dest_dir);
+            emit_row(&self.db, &self.ui_tx, id).await;
+            return Ok(());
+        }
         if !matches!(item.status, QueueStatus::Cancelled) {
             tracing::warn!(id, status = ?item.status, "restart_one: row is not cancelled");
             return Ok(());
@@ -1028,21 +1173,44 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
                 .map_err(|e| DbError::Decode(format!("join error: {e}")))??
         };
 
-        let non_queued_ids: Vec<i64> = rows
-            .iter()
-            .filter(|r| matches!(r.status, QueueStatus::Cancelled | QueueStatus::Error))
-            .map(|r| r.id)
-            .collect();
+        // UC 27: split the resumable set by kind. `video` rows take the
+        // existing clear_for_restart + wake path; `pending` placeholders
+        // get their placeholder reset + a fresh spawn_enumeration_task.
+        let mut video_ids: Vec<i64> = Vec::new();
+        let mut pending_rows_for_respawn: Vec<(i64, String, FormatPref, PathBuf)> = Vec::new();
+        for r in &rows {
+            if !matches!(r.status, QueueStatus::Cancelled | QueueStatus::Error)
+                && !(matches!(r.kind, PlaceholderKind::Pending)
+                    && matches!(r.title_status, TitleStatus::Error))
+            {
+                continue;
+            }
+            if matches!(r.kind, PlaceholderKind::Pending) {
+                pending_rows_for_respawn.push((
+                    r.id,
+                    r.url.clone(),
+                    r.format_pref,
+                    r.dest_dir.clone(),
+                ));
+            } else {
+                video_ids.push(r.id);
+            }
+        }
 
-        if !non_queued_ids.is_empty() {
-            let ids_for_db = non_queued_ids.clone();
+        if !video_ids.is_empty() || !pending_rows_for_respawn.is_empty() {
+            let video_ids_for_db = video_ids.clone();
+            let pending_ids_for_db: Vec<i64> =
+                pending_rows_for_respawn.iter().map(|t| t.0).collect();
             tokio::task::spawn_blocking({
                 let db = self.db.clone();
                 move || -> Result<(), DbError> {
                     db.with_conn_mut(|c| {
                         let tx = c.transaction()?;
-                        for id in &ids_for_db {
+                        for id in &video_ids_for_db {
                             queue::clear_for_restart(&tx, *id)?;
+                        }
+                        for id in &pending_ids_for_db {
+                            queue::clear_for_restart_placeholder(&tx, *id)?;
                         }
                         tx.commit()?;
                         Ok(())
@@ -1053,7 +1221,12 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
             .map_err(|e| DbError::Decode(format!("join error: {e}")))??;
         }
 
-        for id in &non_queued_ids {
+        // Re-spawn enumeration for pending rows outside the transaction.
+        for (id, url, format_pref, dest_dir) in pending_rows_for_respawn {
+            self.spawn_enumeration_task(id, url, format_pref, dest_dir);
+        }
+
+        for id in &video_ids {
             emit_row(&self.db, &self.ui_tx, *id).await;
         }
 
@@ -1169,6 +1342,448 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
         .map_err(|e| format!("could not persist destination on row: {e}"))?;
 
         Ok(resolved)
+    }
+
+    /// UC 27. Resolves a placeholder row's true identity off the UI thread.
+    ///
+    /// The task acquires a metadata-resolve permit (racing against the row's
+    /// own cancel token so cancelled placeholders don't queue behind other
+    /// pending enumerations), then calls
+    /// [`BridgeOps::enumerate_playlist_cancellable`]. On success it either:
+    /// - promotes the row to a `video` kind and spawns a follow-up
+    ///   [`BridgeOps::fetch_metadata_cancellable`] to fill in title +
+    ///   thumbnail + duration, or
+    /// - transactionally replaces the placeholder with N freshly-inserted
+    ///   playlist children and emits a [`UiEvent::RowReplacedWithChildren`]
+    ///   carrying only the newly-inserted child rows.
+    ///
+    /// Cancellation (via `cancel_one` → `metadata_cancel_tokens`) propagates
+    /// to whichever yt-dlp child is currently running and flips the row to
+    /// `Cancelled` without writing into `title_error`. Other errors land in
+    /// `title_status = error` so the row visibly transitions to the error
+    /// affordance.
+    #[allow(clippy::too_many_lines)]
+    fn spawn_enumeration_task(
+        &self,
+        placeholder_id: i64,
+        url: String,
+        format_pref: FormatPref,
+        dest_dir: PathBuf,
+    ) {
+        let bridge = self.bridge.clone();
+        let db = self.db.clone();
+        let ui_tx = self.ui_tx.clone();
+        let js_runtime = self.js_runtime_path.as_ref().clone();
+        let ffmpeg = self.ffmpeg_path.as_ref().clone();
+        let semaphore = self.metadata_resolve_semaphore.clone();
+        let mgr = self.clone();
+        let metadata_cancel_tokens = self.metadata_cancel_tokens.clone();
+        let detected = self.detected_browsers.clone();
+        let coordinator = self.bot_check.clone();
+
+        tokio::spawn(async move {
+            // Register a cancel token BEFORE acquiring the semaphore so a
+            // cancellation while waiting in line tears the wait down.
+            let cancel = Arc::new(Notify::new());
+            metadata_cancel_tokens
+                .lock()
+                .await
+                .insert(placeholder_id, cancel.clone());
+
+            // Race the semaphore-acquire against cancel — a placeholder
+            // cancelled while waiting for a permit should bail immediately.
+            let permit_outcome = tokio::select! {
+                permit = semaphore.acquire_owned() => Some(permit),
+                () = cancel.notified() => None,
+            };
+            let _permit = match permit_outcome {
+                Some(Ok(p)) => p,
+                Some(Err(_)) | None => {
+                    // Cancelled (or semaphore closed). Flip the row to
+                    // cancelled without tainting title_error.
+                    let _ = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        move || {
+                            db.with_conn(|c| {
+                                queue::update_status(c, placeholder_id, QueueStatus::Cancelled)
+                            })
+                        }
+                    })
+                    .await;
+                    let _ = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        move || {
+                            db.with_conn(|c| {
+                                queue::update_title(c, placeholder_id, None, TitleStatus::Pending)
+                            })
+                        }
+                    })
+                    .await;
+                    metadata_cancel_tokens.lock().await.remove(&placeholder_id);
+                    emit_row(&db, &ui_tx, placeholder_id).await;
+                    return;
+                }
+            };
+
+            let cookies_arg = mgr.read_cookies_arg_db_only().await;
+            let enum_result = bridge
+                .enumerate_playlist_cancellable(
+                    &url,
+                    cookies_arg.as_deref(),
+                    js_runtime.as_deref(),
+                    ffmpeg.as_deref(),
+                    cancel.clone(),
+                )
+                .await;
+
+            match enum_result {
+                Ok(EnumerationOutcome::SingleVideo) => {
+                    // Promote to a video row first so the queue runner is
+                    // free to auto-promote on start_requested.
+                    let _ = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        move || {
+                            db.with_conn(|c| queue::promote_placeholder_to_video(c, placeholder_id))
+                        }
+                    })
+                    .await;
+                    // Re-read so we can see whether start_requested was
+                    // latched while we were enumerating.
+                    let pre_metadata_row = {
+                        let db = db.clone();
+                        tokio::task::spawn_blocking(move || {
+                            db.with_conn(|c| queue::find_by_url_by_id_internal(c, placeholder_id))
+                        })
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .flatten()
+                    };
+                    let was_start_requested = pre_metadata_row
+                        .as_ref()
+                        .map(|r| r.start_requested)
+                        .unwrap_or(false);
+                    if was_start_requested {
+                        // Clear the latched intent in the DB now that the
+                        // row is a `video` and eligible for auto-promotion;
+                        // the SQL `kind` gate inside `try_promote_to_in_flight`
+                        // takes over from here.
+                        let _ = tokio::task::spawn_blocking({
+                            let db = db.clone();
+                            move || {
+                                db.with_conn(|c| {
+                                    queue::set_start_requested(c, placeholder_id, false)
+                                })
+                            }
+                        })
+                        .await;
+                    }
+                    emit_row(&db, &ui_tx, placeholder_id).await;
+
+                    // UC 27: wake the runner now that the row is `kind =
+                    // 'video'` and eligible for auto-promotion. Without this
+                    // wake, the runner only revisits the queue after
+                    // metadata resolves (`mgr.wake()` below), which makes
+                    // the `(InFlight, Fetching)` window unreachable when the
+                    // metadata fetch is slow — the parallelism we want for
+                    // single-video Adds.
+                    mgr.wake();
+
+                    // Fetch title + thumbnail + duration in a single
+                    // subprocess (reuses the same cancel token and permit).
+                    let meta_result = bridge
+                        .fetch_metadata_cancellable(
+                            &url,
+                            cookies_arg.as_deref(),
+                            js_runtime.as_deref(),
+                            ffmpeg.as_deref(),
+                            cancel.clone(),
+                        )
+                        .await;
+
+                    match meta_result {
+                        Ok(meta) => {
+                            let title = meta.title.clone();
+                            let _ = tokio::task::spawn_blocking({
+                                let db = db.clone();
+                                let title_for_db = title.clone();
+                                move || {
+                                    db.with_conn(|c| {
+                                        queue::update_title(
+                                            c,
+                                            placeholder_id,
+                                            title_for_db.as_deref(),
+                                            TitleStatus::Ok,
+                                        )
+                                    })
+                                }
+                            })
+                            .await;
+                            emit_row(&db, &ui_tx, placeholder_id).await;
+
+                            if let Some(thumb_url) = meta.thumbnail {
+                                mgr.spawn_thumbnail_fetch(placeholder_id, thumb_url);
+                            }
+                        }
+                        Err(BridgeError::Cancelled) => {
+                            // Mirror cancel_one's title-fetching branch:
+                            // flip to Cancelled without tainting title_error.
+                            let _ = tokio::task::spawn_blocking({
+                                let db = db.clone();
+                                move || {
+                                    db.with_conn(|c| {
+                                        queue::update_status(
+                                            c,
+                                            placeholder_id,
+                                            QueueStatus::Cancelled,
+                                        )
+                                    })
+                                }
+                            })
+                            .await;
+                            let _ = tokio::task::spawn_blocking({
+                                let db = db.clone();
+                                move || {
+                                    db.with_conn(|c| {
+                                        queue::update_title(
+                                            c,
+                                            placeholder_id,
+                                            None,
+                                            TitleStatus::Pending,
+                                        )
+                                    })
+                                }
+                            })
+                            .await;
+                            emit_row(&db, &ui_tx, placeholder_id).await;
+                        }
+                        Err(BridgeError::AuthRequired { .. }) => {
+                            handle_placeholder_auth_required(
+                                &db,
+                                &ui_tx,
+                                &coordinator,
+                                &detected,
+                                placeholder_id,
+                                &cancel,
+                            )
+                            .await;
+                        }
+                        Err(err) => {
+                            let msg = err.to_string();
+                            let _ = tokio::task::spawn_blocking({
+                                let db = db.clone();
+                                let msg = msg.clone();
+                                move || {
+                                    db.with_conn(|c| {
+                                        queue::set_title_error(c, placeholder_id, &msg)
+                                    })
+                                }
+                            })
+                            .await;
+                            emit_row(&db, &ui_tx, placeholder_id).await;
+                        }
+                    }
+
+                    // After single-video resolution: wake the runner so the
+                    // promoted video row gets picked up under the cap.
+                    mgr.wake();
+                }
+                Ok(EnumerationOutcome::Playlist(entries)) => {
+                    // Read the placeholder's current display_order from the
+                    // DB — it is the anchor for the children's slot
+                    // allocation.
+                    let placeholder_row = {
+                        let db = db.clone();
+                        tokio::task::spawn_blocking(move || {
+                            db.with_conn(|c| queue::find_by_url_by_id_internal(c, placeholder_id))
+                        })
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .flatten()
+                    };
+                    let Some(placeholder_row) = placeholder_row else {
+                        metadata_cancel_tokens.lock().await.remove(&placeholder_id);
+                        return;
+                    };
+                    let placeholder_display_order = placeholder_row.display_order;
+
+                    let children: Vec<NewQueueItem> = entries
+                        .iter()
+                        .map(|entry| NewQueueItem {
+                            url: entry.url.clone(),
+                            title: entry.title.clone(),
+                            title_status: if entry.title.is_some() {
+                                TitleStatus::Ok
+                            } else {
+                                TitleStatus::Pending
+                            },
+                            format_pref,
+                            dest_dir: dest_dir.clone(),
+                            kind: PlaceholderKind::Video,
+                            // `display_order` is overwritten inside the
+                            // transactional replace; passing 0 here is fine.
+                            display_order: 0,
+                        })
+                        .collect();
+
+                    let entries_for_lookup = entries.clone();
+                    let replace_outcome = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        move || {
+                            db.with_conn_mut(|c| {
+                                queue::replace_placeholder_with_children(
+                                    c,
+                                    placeholder_id,
+                                    placeholder_display_order,
+                                    &children,
+                                )
+                            })
+                        }
+                    })
+                    .await;
+
+                    let replace_results = match replace_outcome {
+                        Ok(Ok(v)) => v,
+                        Ok(Err(err)) => {
+                            tracing::warn!(?err, placeholder_id, "playlist replace failed");
+                            metadata_cancel_tokens.lock().await.remove(&placeholder_id);
+                            return;
+                        }
+                        Err(join_err) => {
+                            tracing::warn!(
+                                ?join_err,
+                                placeholder_id,
+                                "playlist replace join failed"
+                            );
+                            metadata_cancel_tokens.lock().await.remove(&placeholder_id);
+                            return;
+                        }
+                    };
+
+                    // Build the UI-side child rows for the freshly-inserted
+                    // entries only. Pre-existing duplicates stay where they
+                    // were rendered today.
+                    let mut new_ids: Vec<i64> = Vec::with_capacity(replace_results.len());
+                    let mut new_entries_for_followup: Vec<(i64, PlaylistEntry)> =
+                        Vec::with_capacity(replace_results.len());
+                    for (i, row_id, tag) in &replace_results {
+                        if matches!(tag, InsertedOrPreexisting::Inserted) {
+                            new_ids.push(*row_id);
+                            if let Some(entry) = entries_for_lookup.get(*i) {
+                                new_entries_for_followup.push((*row_id, entry.clone()));
+                            }
+                        }
+                    }
+
+                    let mut child_ui_rows: Vec<UiQueueRow> = Vec::with_capacity(new_ids.len());
+                    for child_id in &new_ids {
+                        let row_opt = {
+                            let db = db.clone();
+                            let id = *child_id;
+                            tokio::task::spawn_blocking(move || {
+                                db.with_conn(|c| queue::find_by_url_by_id_internal(c, id))
+                            })
+                            .await
+                            .ok()
+                            .and_then(Result::ok)
+                            .flatten()
+                        };
+                        if let Some(item) = row_opt {
+                            child_ui_rows.push(to_ui_row(item));
+                        }
+                    }
+
+                    let _ = ui_tx
+                        .send(UiEvent::RowReplacedWithChildren {
+                            placeholder_id,
+                            children: child_ui_rows,
+                        })
+                        .await;
+
+                    // Per-child follow-up: thumbnail (if known) +
+                    // title-fetch (if absent).
+                    for (child_id, entry) in new_entries_for_followup {
+                        if let Some(thumb_url) = entry.thumbnail.clone() {
+                            mgr.spawn_thumbnail_fetch(child_id, thumb_url);
+                        }
+                        if entry.title.is_none() {
+                            mgr.spawn_title_fetch(child_id, entry.url.clone());
+                        }
+                    }
+
+                    mgr.wake();
+                }
+                Err(BridgeError::Cancelled) => {
+                    let _ = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        move || {
+                            db.with_conn(|c| {
+                                queue::update_status(c, placeholder_id, QueueStatus::Cancelled)
+                            })
+                        }
+                    })
+                    .await;
+                    let _ = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        move || {
+                            db.with_conn(|c| {
+                                queue::update_title(c, placeholder_id, None, TitleStatus::Pending)
+                            })
+                        }
+                    })
+                    .await;
+                    emit_row(&db, &ui_tx, placeholder_id).await;
+                }
+                Err(BridgeError::AuthRequired { .. }) => {
+                    handle_placeholder_auth_required(
+                        &db,
+                        &ui_tx,
+                        &coordinator,
+                        &detected,
+                        placeholder_id,
+                        &cancel,
+                    )
+                    .await;
+                }
+                Err(err) => {
+                    let msg = err.to_string();
+                    let _ = tokio::task::spawn_blocking({
+                        let db = db.clone();
+                        let msg = msg.clone();
+                        move || db.with_conn(|c| queue::set_title_error(c, placeholder_id, &msg))
+                    })
+                    .await;
+                    emit_row(&db, &ui_tx, placeholder_id).await;
+                }
+            }
+
+            metadata_cancel_tokens.lock().await.remove(&placeholder_id);
+        });
+    }
+
+    /// UC 27. Re-issues enumeration for every `pending` placeholder row that
+    /// did not complete before the previous shutdown. Mirrors
+    /// [`Self::requeue_pending_title_fetches`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`DbError`] if the seed list cannot be read.
+    pub async fn requeue_pending_enumerations(&self) -> Result<(), DbError> {
+        let db = self.db.clone();
+        let rows: Vec<QueueItem> =
+            tokio::task::spawn_blocking(move || db.with_conn(queue::list_pending_enumerations))
+                .await
+                .map_err(|e| DbError::Decode(format!("join error: {e}")))??;
+        for row in rows {
+            self.spawn_enumeration_task(
+                row.id,
+                row.url.clone(),
+                row.format_pref,
+                row.dest_dir.clone(),
+            );
+        }
+        Ok(())
     }
 
     fn spawn_title_fetch(&self, id: i64, url: String) {
@@ -1784,6 +2399,15 @@ fn to_ui_row(item: QueueItem) -> UiQueueRow {
         .title
         .clone()
         .unwrap_or_else(|| "Fetching…".to_string());
+    // UC 27: `created_at` is stored as a SQLite `CURRENT_TIMESTAMP` ISO-ish
+    // string with second-precision. We need a Unix-epoch ms value so the
+    // Slint template can drive the 5-second "Still fetching info…"
+    // affordance against a wall-clock global. Best-effort parse via
+    // `chrono`-free string handling — on parse failure we fall back to the
+    // current time, which is a small inaccuracy but never causes a
+    // dropped row.
+    let created_at_unix_ms =
+        parse_sqlite_timestamp_to_unix_ms(&item.created_at).unwrap_or_else(current_unix_ms);
     UiQueueRow {
         id: item.id,
         url: item.url,
@@ -1799,5 +2423,82 @@ fn to_ui_row(item: QueueItem) -> UiQueueRow {
         size_bytes: item.size_bytes,
         downloaded_bytes: item.downloaded_bytes,
         thumbnail_path: item.thumbnail_path,
+        kind: item.kind,
+        start_requested: item.start_requested,
+        display_order: item.display_order,
+        created_at_unix_ms,
     }
+}
+
+/// UC 27. Parses a SQLite `CURRENT_TIMESTAMP` ("YYYY-MM-DD HH:MM:SS" in
+/// UTC) into Unix epoch milliseconds. Returns `None` on any parse failure;
+/// the caller falls back to `current_unix_ms` so a stale string never breaks
+/// the row.
+fn parse_sqlite_timestamp_to_unix_ms(s: &str) -> Option<i64> {
+    // Format: "2026-05-11 11:42:00" — fixed widths, no fractional seconds
+    // from SQLite's default CURRENT_TIMESTAMP.
+    let s = s.trim();
+    if s.len() < 19 {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let year: i32 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
+    let month: u32 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
+    let day: u32 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
+    let hour: u32 = std::str::from_utf8(&bytes[11..13]).ok()?.parse().ok()?;
+    let min: u32 = std::str::from_utf8(&bytes[14..16]).ok()?.parse().ok()?;
+    let sec: u32 = std::str::from_utf8(&bytes[17..19]).ok()?.parse().ok()?;
+    // Days-from-civil algorithm (Howard Hinnant). Converts a (y,m,d) UTC
+    // date to days since 1970-01-01 without any chrono dep.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u32;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days_since_epoch = i64::from(era) * 146_097 + i64::from(doe) - 719_468;
+    let secs =
+        days_since_epoch * 86_400 + i64::from(hour) * 3_600 + i64::from(min) * 60 + i64::from(sec);
+    secs.checked_mul(1_000)
+}
+
+fn current_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+/// UC 27. AuthRequired handler for placeholder rows.
+///
+/// Surfaces the bot-check modal so the user can pick a cookies source,
+/// then records a per-row title_error. The placeholder row stays
+/// `kind = 'pending'` so the user's Restart click on the row's error
+/// affordance re-spawns enumeration (via `restart_one`'s pending-kind
+/// branch) with the freshly-persisted cookies.
+///
+/// The coordinator-broadcast retry path used by `spawn_download_for` is
+/// not reused here because the placeholder's metadata-fetch flow is
+/// short and re-runnable from the UI — a single Restart click is the
+/// recovery affordance, not an inline auto-retry.
+async fn handle_placeholder_auth_required(
+    db: &Db,
+    ui_tx: &mpsc::Sender<UiEvent>,
+    _coordinator: &BotCheckCoordinator,
+    detected: &Arc<Vec<Browser>>,
+    placeholder_id: i64,
+    _cancel: &Arc<Notify>,
+) {
+    let _ = ui_tx
+        .send(UiEvent::ShowBotCheckDialog {
+            available: (**detected).clone(),
+        })
+        .await;
+
+    let msg = "YouTube wants cookies. Set a Cookies source in Settings and Restart this row.";
+    let _ = tokio::task::spawn_blocking({
+        let db = db.clone();
+        move || db.with_conn(|c| queue::set_title_error(c, placeholder_id, msg))
+    })
+    .await;
+    emit_row(db, ui_tx, placeholder_id).await;
 }

@@ -7,7 +7,7 @@
 // The QueueRow struct is exported from `main_window.slint` and forms the
 // row data type passed to this component.
 
-import { DesignTokens } from "design/tokens.slint";
+import { DesignTokens, Clock } from "design/tokens.slint";
 import { Button, Badge, Icon } from "design/components.slint";
 import { Icons } from "icons.slint";
 import { Thumbnail } from "thumbnail.slint";
@@ -101,6 +101,22 @@ export struct QueueRow {
     seed: int,
     thumbnail-path: image,
     thumbnail-loaded: bool,
+    // UC 27 placeholder fields:
+    //   `kind` discriminates a placeholder ("pending") from a real video
+    //     row ("video"). The Slint template branches on this to render
+    //     skeleton sub-rows + "Starting…" / "Cancel" affordances.
+    //   `start-requested` is the latched intent from a Start click on a
+    //     pending placeholder. Drives the disabled "Starting…" button.
+    //   `display-order` mirrors the DB sort key; the UI does not sort by
+    //     it directly (the host inserts in order), it is carried for
+    //     debuggability / future use.
+    //   `placeholder-started-at-ms` is a wall-clock anchor compared to the
+    //     `current-now-ms` global so the 5-second "Still fetching info…"
+    //     affordance is purely Slint-driven.
+    kind: string,
+    start-requested: bool,
+    display-order: int,
+    placeholder-started-at-ms: int,
 }
 
 export component QueueRowDelegate inherits Rectangle {
@@ -182,7 +198,15 @@ export component QueueRowDelegate inherits Rectangle {
                         }
 
                         title-text := Text {
-                            text: data.title-status == "fetching" || data.title == "Fetching…" ? "Fetching…" : data.title;
+                            // UC 27: pending placeholders show the (truncated)
+                            // URL in the title slot instead of "Fetching…" so
+                            // the user can see exactly which URL is resolving.
+                            // Once enumeration completes the row's `kind`
+                            // flips to `video` and the regular title-fetch
+                            // path fills the slot in place.
+                            text: data.kind == "pending" ? data.url
+                                  : (data.title-status == "fetching" || data.title == "Fetching…") ? "Fetching…"
+                                  : data.title;
                             color: data.status == "cancelled" || data.status == "done" || data.status == "error"
                                 ? DesignTokens.text-2
                                 : DesignTokens.text;
@@ -224,6 +248,63 @@ export component QueueRowDelegate inherits Rectangle {
                 font-size: 11.5px;
                 overflow: elide;
                 wrap: no-wrap;
+            }
+
+            // UC 27 — placeholder skeleton sub-row (kind=pending, no error,
+            // within the first 5 s). A shimmering rectangle stands in for
+            // the metadata block while yt-dlp's --dump-single-json runs.
+            if data.kind == "pending" && data.title-status != "error"
+                && (Clock.current-now-ms - data.placeholder-started-at-ms) <= 5000 : Rectangle {
+                height: 14px;
+                border-radius: 3px;
+                background: DesignTokens.surface-3;
+                clip: true;
+
+                Image {
+                    x: skel-anim.x-shift;
+                    y: 0;
+                    width: parent.width + 17px;
+                    height: parent.height;
+                    source: DesignTokens.dark-mode ? Icons.shimmer-dark : Icons.shimmer-light;
+                    image-fit: fill;
+                    opacity: 0.6;
+                }
+                skel-anim := Rectangle {
+                    property <length> x-shift: 0;
+                    animate x-shift {
+                        duration: 1200ms;
+                        iteration-count: -1;
+                        easing: linear;
+                    }
+                    states [
+                        running when data.kind == "pending": {
+                            x-shift: -17px;
+                        }
+                    ]
+                }
+            }
+
+            // UC 27 — "Still fetching info…" affordance after 5 s. AC #13:
+            // applies uniformly to single-video metadata + playlist
+            // enumeration + per-video metadata inside a playlist
+            // expansion (all rendered as `kind = 'pending'`).
+            if data.kind == "pending" && data.title-status != "error"
+                && (Clock.current-now-ms - data.placeholder-started-at-ms) > 5000 : HorizontalLayout {
+                spacing: 6px;
+                padding-top: 4px;
+                Icon {
+                    source: Icons.info;
+                    size: "sm";
+                    tint: DesignTokens.text-2;
+                }
+                Text {
+                    text: "Still fetching info…";
+                    color: DesignTokens.text-2;
+                    font-family: DesignTokens.font-ui-family;
+                    font-size: 11.5px;
+                    font-italic: true;
+                    vertical-alignment: center;
+                }
             }
 
             // Row 3 — progress sub-row (in_flight, cancelled, cancelling).
@@ -356,15 +437,46 @@ export component QueueRowDelegate inherits Rectangle {
             spacing: 6px;
             alignment: start;
 
-            // queued → Download (primary, icon=download) + Cancel.
-            if data.status == "queued" : Button {
+            // queued (video kind) → Download (primary) + Cancel. UC 27
+            // tightens the `data.status == "queued"` predicate with
+            // `data.kind == "video"` so a pending placeholder gets the
+            // placeholder-specific affordances below instead of the
+            // download button.
+            if data.status == "queued" && data.kind == "video" : Button {
                 text: "Download";
                 variant: "primary";
                 modifier: "sm";
                 icon: Icons.download;
                 clicked => { root.start-clicked(data.id); }
             }
-            if data.status == "queued" : Button {
+            if data.status == "queued" && data.kind == "video" : Button {
+                text: "Cancel";
+                modifier: "sm";
+                clicked => { root.cancel-clicked(data.id); }
+            }
+
+            // UC 27 — pending placeholder, no Start latched yet.
+            // Same "Download" primary button as a video row; clicking it
+            // latches `start-requested = 1` and switches to "Starting…".
+            if data.status == "queued" && data.kind == "pending" && !data.start-requested : Button {
+                text: "Download";
+                variant: "primary";
+                modifier: "sm";
+                icon: Icons.download;
+                clicked => { root.start-clicked(data.id); }
+            }
+            // UC 27 — pending placeholder, Start latched. AC #12: the
+            // button is disabled and reads "Starting…" until enumeration
+            // resolves and the download runner picks the row up.
+            if data.status == "queued" && data.kind == "pending" && data.start-requested : Button {
+                text: "Starting…";
+                modifier: "sm";
+                enabled: false;
+            }
+            // UC 27 — Cancel is always available on a pending placeholder
+            // (AC #12 cancellation semantics for in-flight metadata
+            // fetches).
+            if data.status == "queued" && data.kind == "pending" : Button {
                 text: "Cancel";
                 modifier: "sm";
                 clicked => { root.cancel-clicked(data.id); }

@@ -454,3 +454,278 @@ fn stderr_tail(stderr: &[u8]) -> String {
     let start = stderr.len().saturating_sub(STDERR_TAIL_BUDGET);
     String::from_utf8_lossy(&stderr[start..]).to_string()
 }
+
+/// Metadata pulled in a single `yt-dlp --dump-single-json --no-download
+/// --no-playlist <url>` invocation (UC 27). Carries only the fields the UI
+/// needs to fill in a placeholder card — title, thumbnail, and duration.
+///
+/// `deny_unknown_fields` is intentionally NOT set: yt-dlp emits dozens of
+/// extractor-specific fields per line and silent ignore is required for
+/// stability across upstream versions (matches the [`RawPlaylistEntry`]
+/// posture in this module).
+#[derive(Debug, Clone, Deserialize)]
+pub struct VideoMetadata {
+    pub title: Option<String>,
+    pub thumbnail: Option<String>,
+    /// Duration in seconds. yt-dlp emits this as a float (or int) on most
+    /// extractors; absent on a handful where the extractor cannot probe
+    /// the media without a full HLS/DASH manifest fetch. `Option<u64>` so
+    /// the UI can render a skeleton instead of "0s".
+    #[serde(default, deserialize_with = "deserialize_optional_duration")]
+    pub duration_s: Option<u64>,
+}
+
+fn deserialize_optional_duration<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // yt-dlp emits duration as a number (int or float). Accept either; clamp
+    // negatives and NaN to None.
+    let val: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    Ok(val.and_then(|v| match v {
+        serde_json::Value::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                Some(u)
+            } else if let Some(f) = n.as_f64() {
+                if f.is_finite() && f >= 0.0 {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    Some(f as u64)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }))
+}
+
+/// Outcome of an enumeration probe (UC 27). `SingleVideo` carries no
+/// payload — yt-dlp's `--flat-playlist` does not reliably populate per-entry
+/// metadata, so the caller always follows up with [`fetch_metadata`]. The
+/// `Playlist` variant carries the per-entry list in playlist order, matching
+/// today's [`expand_playlist`] return shape.
+#[derive(Debug, Clone)]
+pub enum EnumerationOutcome {
+    SingleVideo,
+    Playlist(Vec<PlaylistEntry>),
+}
+
+/// Cancellable single-video metadata fetch (UC 27).
+///
+/// Spawns `yt-dlp --dump-single-json --no-download --no-playlist <url>`,
+/// parses one JSON line, and returns the subset of fields the UI cares about.
+/// Pattern-mirrors [`get_title_cancellable`] for pipe drain + `tokio::select!`
+/// over `child.wait()` / timeout / cancel + [`terminate_with_grace`] on cancel.
+///
+/// # Errors
+///
+/// Same shape as [`get_title_cancellable`] plus [`BridgeError::Json`] when
+/// the stdout cannot be deserialized.
+pub async fn fetch_metadata(
+    yt_dlp_path: &Path,
+    url: &str,
+    timeout_dur: Duration,
+    cookies_browser: Option<&str>,
+    js_runtime_path: Option<&Path>,
+    ffmpeg_path: Option<&Path>,
+    cancel: Arc<Notify>,
+) -> Result<VideoMetadata> {
+    let mut cmd = Command::new(yt_dlp_path);
+    cmd.arg("--dump-single-json")
+        .arg("--no-download")
+        .arg("--no-playlist");
+    if let Some(browser) = cookies_browser {
+        cmd.arg("--cookies-from-browser").arg(browser);
+    }
+    if let Some(deno) = js_runtime_path {
+        cmd.arg("--js-runtimes")
+            .arg(format!("deno:{}", deno.display()));
+    }
+    if let Some(ffmpeg) = ffmpeg_path
+        && let Some(parent) = ffmpeg.parent()
+    {
+        cmd.arg("--ffmpeg-location").arg(parent);
+    }
+    cmd.arg(url).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(BridgeError::Spawn)?;
+
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| BridgeError::Parse("child stdout missing".to_string()))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| BridgeError::Parse("child stderr missing".to_string()))?;
+
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::with_capacity(8192);
+        let _ = stdout.read_to_end(&mut buf).await;
+        buf
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::with_capacity(1024);
+        let _ = stderr.read_to_end(&mut buf).await;
+        buf
+    });
+
+    let status = tokio::select! {
+        res = child.wait() => res?,
+        () = tokio::time::sleep(timeout_dur) => {
+            terminate_with_grace(&mut child).await;
+            return Err(BridgeError::ExitedWithError {
+                code: None,
+                stderr_tail: format!("yt-dlp --dump-single-json timed out after {timeout_dur:?}"),
+            });
+        }
+        () = cancel.notified() => {
+            terminate_with_grace(&mut child).await;
+            return Err(BridgeError::Cancelled);
+        }
+    };
+
+    let stdout_buf = stdout_task.await.unwrap_or_default();
+    let stderr_buf = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
+        let tail = stderr_tail(&stderr_buf);
+        if is_bot_check_stderr(&tail) {
+            return Err(BridgeError::AuthRequired { stderr_tail: tail });
+        }
+        return Err(BridgeError::ExitedWithError {
+            code: status.code(),
+            stderr_tail: tail,
+        });
+    }
+
+    let raw = String::from_utf8_lossy(&stdout_buf);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(BridgeError::ExitedWithError {
+            code: status.code(),
+            stderr_tail: "yt-dlp --dump-single-json produced empty stdout".to_string(),
+        });
+    }
+    let metadata: VideoMetadata = serde_json::from_str(trimmed)?;
+    Ok(metadata)
+}
+
+/// Cancellable playlist enumeration (UC 27).
+///
+/// Spawns `yt-dlp --flat-playlist --dump-json <url>` and parses each line
+/// of stdout as a [`PlaylistEntry`]. Returns [`EnumerationOutcome::SingleVideo`]
+/// when only one entry comes back whose URL matches the input (the
+/// single-video fall-through preserved from [`expand_playlist`]). Cancellation
+/// mirrors [`get_title_cancellable`].
+///
+/// # Errors
+///
+/// Same shape as [`get_title_cancellable`] / [`expand_playlist`] (spawn,
+/// non-zero exit, timeout / cancel, JSON deserialize).
+pub async fn enumerate_playlist_cancellable(
+    yt_dlp_path: &Path,
+    url: &str,
+    timeout_dur: Duration,
+    cookies_browser: Option<&str>,
+    js_runtime_path: Option<&Path>,
+    ffmpeg_path: Option<&Path>,
+    cancel: Arc<Notify>,
+) -> Result<EnumerationOutcome> {
+    let mut cmd = Command::new(yt_dlp_path);
+    cmd.arg("--flat-playlist").arg("--dump-json");
+    if let Some(browser) = cookies_browser {
+        cmd.arg("--cookies-from-browser").arg(browser);
+    }
+    if let Some(deno) = js_runtime_path {
+        cmd.arg("--js-runtimes")
+            .arg(format!("deno:{}", deno.display()));
+    }
+    if let Some(ffmpeg) = ffmpeg_path
+        && let Some(parent) = ffmpeg.parent()
+    {
+        cmd.arg("--ffmpeg-location").arg(parent);
+    }
+    cmd.arg(url).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(BridgeError::Spawn)?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| BridgeError::Parse("child stdout missing".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| BridgeError::Parse("child stderr missing".to_string()))?;
+
+    let stdout_reader = BufReader::new(stdout);
+    let stderr_reader = BufReader::new(stderr);
+
+    let stdout_task = tokio::spawn(async move {
+        let mut entries: Vec<PlaylistEntry> = Vec::new();
+        let mut lines = stdout_reader.lines();
+        while let Some(line) = lines.next_line().await? {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: PlaylistEntry = serde_json::from_str(&line)?;
+            entries.push(entry);
+        }
+        Ok::<Vec<PlaylistEntry>, BridgeError>(entries)
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::with_capacity(1024);
+        let mut lines = stderr_reader.lines();
+        while let Some(line) = lines.next_line().await.unwrap_or(None) {
+            buf.extend_from_slice(line.as_bytes());
+            buf.push(b'\n');
+        }
+        buf
+    });
+
+    let status = tokio::select! {
+        res = child.wait() => res?,
+        () = tokio::time::sleep(timeout_dur) => {
+            terminate_with_grace(&mut child).await;
+            return Err(BridgeError::ExitedWithError {
+                code: None,
+                stderr_tail: format!("yt-dlp --flat-playlist timed out after {timeout_dur:?}"),
+            });
+        }
+        () = cancel.notified() => {
+            terminate_with_grace(&mut child).await;
+            return Err(BridgeError::Cancelled);
+        }
+    };
+
+    let entries_res = stdout_task
+        .await
+        .map_err(|e| BridgeError::Parse(format!("stdout task join error: {e}")))?;
+    let stderr_buf = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
+        let tail = stderr_tail(&stderr_buf);
+        if is_bot_check_stderr(&tail) {
+            return Err(BridgeError::AuthRequired { stderr_tail: tail });
+        }
+        return Err(BridgeError::ExitedWithError {
+            code: status.code(),
+            stderr_tail: tail,
+        });
+    }
+
+    let entries = entries_res?;
+    if entries.len() == 1 && entries[0].url == url {
+        return Ok(EnumerationOutcome::SingleVideo);
+    }
+    if entries.is_empty() {
+        // Defensive: yt-dlp returned nothing parseable. Treat as a single
+        // video so the caller's metadata fallback runs against the input URL.
+        return Ok(EnumerationOutcome::SingleVideo);
+    }
+    Ok(EnumerationOutcome::Playlist(entries))
+}

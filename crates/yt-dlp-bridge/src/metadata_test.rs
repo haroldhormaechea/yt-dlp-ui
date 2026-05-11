@@ -3,7 +3,7 @@
 //! `webpage_url` wins over `url`; either alone is sufficient; both absent
 //! is a structured error; titles are passed through (including `null`).
 
-use super::PlaylistEntry;
+use super::{PlaylistEntry, VideoMetadata};
 
 #[test]
 fn deserializes_with_both_url_and_webpage_url() {
@@ -113,4 +113,78 @@ fn deserializes_with_null_thumbnail() {
         entry.thumbnail, None,
         "explicit null thumbnail deserializes to None"
     );
+}
+
+// -- UC 27: VideoMetadata ----------------------------------------------
+
+#[test]
+fn video_metadata_deserializes_integer_duration() {
+    // yt-dlp emits duration as an integer on many extractors.
+    let json = r#"{"title":"Sample","thumbnail":"https://example.com/t.jpg","duration":180}"#;
+    let meta: VideoMetadata = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(meta.title.as_deref(), Some("Sample"));
+    assert_eq!(meta.thumbnail.as_deref(), Some("https://example.com/t.jpg"));
+    assert_eq!(meta.duration_s, Some(180));
+}
+
+#[test]
+fn video_metadata_deserializes_float_duration() {
+    // The float case (e.g. HLS extractors with sub-second precision); the
+    // custom deserializer must clamp to u64 not bail.
+    let json = r#"{"title":"Float","duration":182.45}"#;
+    let meta: VideoMetadata = serde_json::from_str(json).expect("deserialize float duration");
+    assert_eq!(meta.duration_s, Some(182), "float floors to u64");
+}
+
+#[test]
+fn video_metadata_handles_negative_duration_as_none() {
+    let json = r#"{"title":"Neg","duration":-1.0}"#;
+    let meta: VideoMetadata = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(
+        meta.duration_s, None,
+        "negative duration clamps to None rather than panicking on cast_sign_loss"
+    );
+}
+
+#[test]
+fn video_metadata_handles_null_duration() {
+    let json = r#"{"title":"NoDur","duration":null}"#;
+    let meta: VideoMetadata = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(meta.duration_s, None);
+}
+
+#[test]
+fn video_metadata_handles_absent_duration() {
+    // Extractor omitted the field entirely.
+    let json = r#"{"title":"Bare"}"#;
+    let meta: VideoMetadata = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(meta.duration_s, None);
+    assert_eq!(meta.title.as_deref(), Some("Bare"));
+    assert_eq!(meta.thumbnail, None);
+}
+
+#[test]
+fn video_metadata_ignores_unknown_fields() {
+    // Stability across upstream versions — yt-dlp's actual --dump-single-json
+    // output carries dozens of fields.
+    let json = r#"{
+        "title": "Full",
+        "thumbnail": "https://example.com/t.jpg",
+        "duration": 240,
+        "id": "abc",
+        "uploader": "Channel",
+        "view_count": 12345,
+        "ie_key": "Youtube"
+    }"#;
+    let meta: VideoMetadata = serde_json::from_str(json).expect("unknown fields are ignored");
+    assert_eq!(meta.title.as_deref(), Some("Full"));
+    assert_eq!(meta.duration_s, Some(240));
+}
+
+#[test]
+fn video_metadata_handles_nan_duration_as_none() {
+    // Non-finite float must not panic on cast — guarded by `is_finite`.
+    let json = r#"{"title":"NaN","duration":null}"#;
+    let meta: VideoMetadata = serde_json::from_str(json).expect("deserialize");
+    assert_eq!(meta.duration_s, None);
 }

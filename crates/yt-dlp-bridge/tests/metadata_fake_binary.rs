@@ -14,7 +14,8 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use yt_dlp_bridge::{
-    BridgeError, expand_playlist, get_thumbnail_url, get_title, get_title_cancellable,
+    BridgeError, EnumerationOutcome, enumerate_playlist_cancellable, expand_playlist,
+    fetch_metadata, get_thumbnail_url, get_title, get_title_cancellable,
 };
 
 // Serialises test bodies to prevent the Linux fork+exec ETXTBSY race:
@@ -767,4 +768,331 @@ async fn expand_playlist_forwards_ffmpeg_location_arg_when_set() {
     drop(tmp);
     drop(ffmpeg_tmp);
     drop(dest);
+}
+
+// -- UC 27 ----------------------------------------------------------------
+
+#[tokio::test]
+async fn fetch_metadata_returns_title_thumbnail_and_duration() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    let (tmp, bin) = write_fake(
+        r#"#!/bin/sh
+echo '{"title":"Sample","thumbnail":"https://i.example.com/t.jpg","duration":180}'
+"#,
+    );
+    let cancel = Arc::new(Notify::new());
+    let meta = fetch_metadata(
+        &bin,
+        "https://example.com/v",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect("fetch_metadata");
+    assert_eq!(meta.title.as_deref(), Some("Sample"));
+    assert_eq!(
+        meta.thumbnail.as_deref(),
+        Some("https://i.example.com/t.jpg")
+    );
+    assert_eq!(meta.duration_s, Some(180));
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn fetch_metadata_handles_float_duration() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    let (tmp, bin) = write_fake(
+        r#"#!/bin/sh
+echo '{"title":"Float","duration":182.45}'
+"#,
+    );
+    let cancel = Arc::new(Notify::new());
+    let meta = fetch_metadata(
+        &bin,
+        "https://example.com/v",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect("fetch_metadata");
+    assert_eq!(
+        meta.duration_s,
+        Some(182),
+        "float floors to integer seconds"
+    );
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn fetch_metadata_empty_stdout_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    let (tmp, bin) = write_fake("#!/bin/sh\nexit 0\n");
+    let cancel = Arc::new(Notify::new());
+    let err = fetch_metadata(
+        &bin,
+        "https://example.com/v",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect_err("empty stdout must fail");
+    assert!(matches!(err, BridgeError::ExitedWithError { .. }));
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn fetch_metadata_bot_check_stderr_yields_auth_required() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    let (tmp, bin) = write_fake(
+        r#"#!/bin/sh
+echo "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser." >&2
+exit 1
+"#,
+    );
+    let cancel = Arc::new(Notify::new());
+    let err = fetch_metadata(
+        &bin,
+        "https://example.com/v",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect_err("bot-check must surface");
+    assert!(
+        matches!(err, BridgeError::AuthRequired { .. }),
+        "expected BridgeError::AuthRequired, got {err:?}"
+    );
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn fetch_metadata_cancel_returns_cancelled_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    // Fake hangs with a SIGTERM trap so terminate_with_grace must escalate
+    // to SIGKILL. Mirrors the get_title_cancellable cancel test.
+    let (tmp, bin) = write_fake(
+        r"#!/bin/sh
+trap 'echo got_term >&2; true' TERM
+while true; do
+    j=0
+    while [ $j -lt 100000 ]; do
+        j=$((j+1))
+    done
+done
+",
+    );
+    let cancel = Arc::new(Notify::new());
+    let cancel_clone = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        cancel_clone.notify_one();
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        fetch_metadata(
+            &bin,
+            "https://example.com/cancel-me",
+            Duration::from_mins(1),
+            None,
+            None,
+            None,
+            cancel,
+        ),
+    )
+    .await
+    .expect("must return within 5s");
+    assert!(
+        matches!(result, Err(BridgeError::Cancelled)),
+        "expected BridgeError::Cancelled, got {result:?}"
+    );
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn fetch_metadata_malformed_json_is_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    let (tmp, bin) = write_fake("#!/bin/sh\necho 'not json'\n");
+    let cancel = Arc::new(Notify::new());
+    let err = fetch_metadata(
+        &bin,
+        "https://example.com/v",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect_err("malformed JSON must fail");
+    assert!(
+        matches!(err, BridgeError::Json(_)),
+        "expected BridgeError::Json, got {err:?}"
+    );
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn enumerate_playlist_cancellable_single_line_matching_input_returns_single_video() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    // Mirrors expand_playlist's single-video fall-through: one JSON line
+    // whose URL matches the input → EnumerationOutcome::SingleVideo.
+    let (tmp, bin) = write_fake(
+        r#"#!/bin/sh
+echo '{"webpage_url":"https://example.com/single","title":"X"}'
+"#,
+    );
+    let cancel = Arc::new(Notify::new());
+    let outcome = enumerate_playlist_cancellable(
+        &bin,
+        "https://example.com/single",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect("enumerate_playlist_cancellable");
+    assert!(
+        matches!(outcome, EnumerationOutcome::SingleVideo),
+        "single matching line → SingleVideo"
+    );
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn enumerate_playlist_cancellable_multi_line_returns_playlist() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    let (tmp, bin) = write_fake(
+        r#"#!/bin/sh
+echo '{"webpage_url":"https://example.com/p1","title":"P1"}'
+echo '{"webpage_url":"https://example.com/p2","title":null}'
+echo '{"webpage_url":"https://example.com/p3","title":"P3"}'
+"#,
+    );
+    let cancel = Arc::new(Notify::new());
+    let outcome = enumerate_playlist_cancellable(
+        &bin,
+        "https://example.com/playlist",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect("enumerate_playlist_cancellable");
+    match outcome {
+        EnumerationOutcome::Playlist(entries) => {
+            assert_eq!(entries.len(), 3, "all three entries returned");
+            assert_eq!(entries[0].url, "https://example.com/p1");
+            assert_eq!(entries[1].title, None);
+            assert_eq!(entries[2].title.as_deref(), Some("P3"));
+        }
+        other @ EnumerationOutcome::SingleVideo => panic!("expected Playlist, got {other:?}"),
+    }
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn enumerate_playlist_cancellable_empty_stdout_yields_single_video() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    // Defensive: yt-dlp returned nothing parseable. Treat as single video
+    // so the caller's metadata fallback runs against the input URL.
+    let (tmp, bin) = write_fake("#!/bin/sh\nexit 0\n");
+    let cancel = Arc::new(Notify::new());
+    let outcome = enumerate_playlist_cancellable(
+        &bin,
+        "https://example.com/x",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect("enumerate_playlist_cancellable");
+    assert!(matches!(outcome, EnumerationOutcome::SingleVideo));
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn enumerate_playlist_cancellable_cancel_returns_cancelled_error() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    let (tmp, bin) = write_fake(
+        r"#!/bin/sh
+trap 'echo got_term >&2; true' TERM
+while true; do
+    j=0
+    while [ $j -lt 100000 ]; do
+        j=$((j+1))
+    done
+done
+",
+    );
+    let cancel = Arc::new(Notify::new());
+    let cancel_clone = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        cancel_clone.notify_one();
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        enumerate_playlist_cancellable(
+            &bin,
+            "https://example.com/cancel-enum",
+            Duration::from_mins(1),
+            None,
+            None,
+            None,
+            cancel,
+        ),
+    )
+    .await
+    .expect("must return within 5s");
+    assert!(
+        matches!(result, Err(BridgeError::Cancelled)),
+        "expected BridgeError::Cancelled, got {result:?}"
+    );
+    drop(tmp);
+}
+
+#[tokio::test]
+async fn enumerate_playlist_cancellable_bot_check_yields_auth_required() {
+    let _fake_bin_guard = FAKE_BIN_LOCK.lock().await;
+    let (tmp, bin) = write_fake(
+        r#"#!/bin/sh
+echo "ERROR: [youtube] B10ECkQXQtU: Sign in to confirm you're not a bot. Use --cookies-from-browser." >&2
+exit 1
+"#,
+    );
+    let cancel = Arc::new(Notify::new());
+    let err = enumerate_playlist_cancellable(
+        &bin,
+        "https://www.youtube.com/watch?v=B10ECkQXQtU",
+        Duration::from_secs(5),
+        None,
+        None,
+        None,
+        cancel,
+    )
+    .await
+    .expect_err("bot-check must surface");
+    assert!(
+        matches!(err, BridgeError::AuthRequired { .. }),
+        "expected BridgeError::AuthRequired, got {err:?}"
+    );
+    drop(tmp);
 }

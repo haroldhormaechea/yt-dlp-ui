@@ -15,7 +15,7 @@
 //! `MainWindow::new()` returning Ok already proves the Slint compile and
 //! widget tree are sound; that is what this test pins.
 
-use app::model::{QueueStatus, TitleStatus, UiQueueRow};
+use app::model::{PlaceholderKind, QueueStatus, TitleStatus, UiQueueRow};
 use app::{MainWindow, ui_row_for_test};
 use slint::{Model, ModelRc, VecModel};
 use std::path::PathBuf;
@@ -59,6 +59,10 @@ fn make_row(id: i64, status: QueueStatus, url: &str) -> UiQueueRow {
             None
         },
         thumbnail_path: None,
+        kind: PlaceholderKind::Video,
+        start_requested: false,
+        display_order: 0,
+        created_at_unix_ms: 0,
     }
 }
 

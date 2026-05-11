@@ -30,7 +30,9 @@ use crate::bot_check::{BotCheckCoordinator, CoordinatorOutcome, RetryDecision};
 use crate::browsers::Browser;
 use crate::db::queue::InsertedOrPreexisting;
 use crate::db::{Db, DbError, queue, settings};
-use crate::model::{NewQueueItem, PlaceholderKind, QueueItem, QueueStatus, TitleStatus, UiQueueRow};
+use crate::model::{
+    NewQueueItem, PlaceholderKind, QueueItem, QueueStatus, TitleStatus, UiQueueRow,
+};
 use crate::paths;
 
 /// How long we let `yt-dlp --print %(title)s` run before timing out. Generous
@@ -591,7 +593,9 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
         // UC 27: allocate a fresh display-order slot before the insert. The
         // counter is per-process; concurrent Adds get strictly increasing
         // values, matching the order they hit `add_url`.
-        let order_u64 = self.display_order_seq.fetch_add(DISPLAY_ORDER_STRIDE, Ordering::Relaxed);
+        let order_u64 = self
+            .display_order_seq
+            .fetch_add(DISPLAY_ORDER_STRIDE, Ordering::Relaxed);
         let display_order = i64::try_from(order_u64).unwrap_or(i64::MAX);
 
         let new_item = NewQueueItem {
@@ -1400,7 +1404,9 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
                     let _ = tokio::task::spawn_blocking({
                         let db = db.clone();
                         move || {
-                            db.with_conn(|c| queue::update_status(c, placeholder_id, QueueStatus::Cancelled))
+                            db.with_conn(|c| {
+                                queue::update_status(c, placeholder_id, QueueStatus::Cancelled)
+                            })
                         }
                     })
                     .await;
@@ -1436,7 +1442,9 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
                     // free to auto-promote on start_requested.
                     let _ = tokio::task::spawn_blocking({
                         let db = db.clone();
-                        move || db.with_conn(|c| queue::promote_placeholder_to_video(c, placeholder_id))
+                        move || {
+                            db.with_conn(|c| queue::promote_placeholder_to_video(c, placeholder_id))
+                        }
                     })
                     .await;
                     // Re-read so we can see whether start_requested was
@@ -1462,11 +1470,24 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
                         // takes over from here.
                         let _ = tokio::task::spawn_blocking({
                             let db = db.clone();
-                            move || db.with_conn(|c| queue::set_start_requested(c, placeholder_id, false))
+                            move || {
+                                db.with_conn(|c| {
+                                    queue::set_start_requested(c, placeholder_id, false)
+                                })
+                            }
                         })
                         .await;
                     }
                     emit_row(&db, &ui_tx, placeholder_id).await;
+
+                    // UC 27: wake the runner now that the row is `kind =
+                    // 'video'` and eligible for auto-promotion. Without this
+                    // wake, the runner only revisits the queue after
+                    // metadata resolves (`mgr.wake()` below), which makes
+                    // the `(InFlight, Fetching)` window unreachable when the
+                    // metadata fetch is slow — the parallelism we want for
+                    // single-video Adds.
+                    mgr.wake();
 
                     // Fetch title + thumbnail + duration in a single
                     // subprocess (reuses the same cancel token and permit).
@@ -1630,7 +1651,11 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
                             return;
                         }
                         Err(join_err) => {
-                            tracing::warn!(?join_err, placeholder_id, "playlist replace join failed");
+                            tracing::warn!(
+                                ?join_err,
+                                placeholder_id,
+                                "playlist replace join failed"
+                            );
                             metadata_cancel_tokens.lock().await.remove(&placeholder_id);
                             return;
                         }
@@ -1726,9 +1751,7 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
                     let _ = tokio::task::spawn_blocking({
                         let db = db.clone();
                         let msg = msg.clone();
-                        move || {
-                            db.with_conn(|c| queue::set_title_error(c, placeholder_id, &msg))
-                        }
+                        move || db.with_conn(|c| queue::set_title_error(c, placeholder_id, &msg))
                     })
                     .await;
                     emit_row(&db, &ui_tx, placeholder_id).await;
@@ -1748,11 +1771,10 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
     /// Returns the underlying [`DbError`] if the seed list cannot be read.
     pub async fn requeue_pending_enumerations(&self) -> Result<(), DbError> {
         let db = self.db.clone();
-        let rows: Vec<QueueItem> = tokio::task::spawn_blocking(move || {
-            db.with_conn(queue::list_pending_enumerations)
-        })
-        .await
-        .map_err(|e| DbError::Decode(format!("join error: {e}")))??;
+        let rows: Vec<QueueItem> =
+            tokio::task::spawn_blocking(move || db.with_conn(queue::list_pending_enumerations))
+                .await
+                .map_err(|e| DbError::Decode(format!("join error: {e}")))??;
         for row in rows {
             self.spawn_enumeration_task(
                 row.id,
@@ -2384,8 +2406,8 @@ fn to_ui_row(item: QueueItem) -> UiQueueRow {
     // `chrono`-free string handling — on parse failure we fall back to the
     // current time, which is a small inaccuracy but never causes a
     // dropped row.
-    let created_at_unix_ms = parse_sqlite_timestamp_to_unix_ms(&item.created_at)
-        .unwrap_or_else(current_unix_ms);
+    let created_at_unix_ms =
+        parse_sqlite_timestamp_to_unix_ms(&item.created_at).unwrap_or_else(current_unix_ms);
     UiQueueRow {
         id: item.id,
         url: item.url,
@@ -2434,10 +2456,8 @@ fn parse_sqlite_timestamp_to_unix_ms(s: &str) -> Option<i64> {
     let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days_since_epoch = i64::from(era) * 146_097 + i64::from(doe) - 719_468;
-    let secs = days_since_epoch * 86_400
-        + i64::from(hour) * 3_600
-        + i64::from(min) * 60
-        + i64::from(sec);
+    let secs =
+        days_since_epoch * 86_400 + i64::from(hour) * 3_600 + i64::from(min) * 60 + i64::from(sec);
     secs.checked_mul(1_000)
 }
 

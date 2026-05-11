@@ -793,7 +793,10 @@ echo '{"title":"Sample","thumbnail":"https://i.example.com/t.jpg","duration":180
     .await
     .expect("fetch_metadata");
     assert_eq!(meta.title.as_deref(), Some("Sample"));
-    assert_eq!(meta.thumbnail.as_deref(), Some("https://i.example.com/t.jpg"));
+    assert_eq!(
+        meta.thumbnail.as_deref(),
+        Some("https://i.example.com/t.jpg")
+    );
     assert_eq!(meta.duration_s, Some(180));
     drop(tmp);
 }
@@ -818,7 +821,11 @@ echo '{"title":"Float","duration":182.45}'
     )
     .await
     .expect("fetch_metadata");
-    assert_eq!(meta.duration_s, Some(182), "float floors to integer seconds");
+    assert_eq!(
+        meta.duration_s,
+        Some(182),
+        "float floors to integer seconds"
+    );
     drop(tmp);
 }
 

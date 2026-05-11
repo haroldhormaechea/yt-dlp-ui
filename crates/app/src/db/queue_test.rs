@@ -816,8 +816,8 @@ fn replace_placeholder_with_children_happy_path() {
         },
     ];
 
-    let out = queue::replace_placeholder_with_children(&mut conn, ph_id, 1_048_576, &children)
-        .unwrap();
+    let out =
+        queue::replace_placeholder_with_children(&mut conn, ph_id, 1_048_576, &children).unwrap();
     assert_eq!(out.len(), 2);
     for (_, _, tag) in &out {
         assert!(matches!(tag, InsertedOrPreexisting::Inserted));
@@ -887,8 +887,8 @@ fn replace_placeholder_with_children_collides_via_insert_or_ignore() {
         },
     ];
 
-    let out = queue::replace_placeholder_with_children(&mut conn, ph_id, 1_048_576, &children)
-        .unwrap();
+    let out =
+        queue::replace_placeholder_with_children(&mut conn, ph_id, 1_048_576, &children).unwrap();
     assert_eq!(out.len(), 2);
 
     // Tag + id of the colliding entry == pre-existing row.

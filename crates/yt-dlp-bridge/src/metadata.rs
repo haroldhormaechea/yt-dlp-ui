@@ -475,7 +475,9 @@ pub struct VideoMetadata {
     pub duration_s: Option<u64>,
 }
 
-fn deserialize_optional_duration<'de, D>(deserializer: D) -> std::result::Result<Option<u64>, D::Error>
+fn deserialize_optional_duration<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -483,7 +485,6 @@ where
     // negatives and NaN to None.
     let val: Option<serde_json::Value> = Option::deserialize(deserializer)?;
     Ok(val.and_then(|v| match v {
-        serde_json::Value::Null => None,
         serde_json::Value::Number(n) => {
             if let Some(u) = n.as_u64() {
                 Some(u)

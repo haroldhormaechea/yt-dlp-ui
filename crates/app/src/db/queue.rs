@@ -132,8 +132,11 @@ pub fn find_by_url_by_id_internal(conn: &Connection, id: i64) -> Result<Option<Q
 
 /// Updates the title and title-fetch status for one row.
 ///
-/// `title_error` is cleared when `status = ok`; preserved otherwise so the
-/// caller can store an error message via a separate path if needed.
+/// `title_error` is cleared when the new status is `ok` (success path)
+/// or `pending` (clean reset — typically a metadata-cancel teardown
+/// from `spawn_enumeration_task`'s `BridgeError::Cancelled` branch).
+/// Preserved otherwise so the caller can store an error message via a
+/// separate path if needed.
 ///
 /// # Errors
 ///
@@ -144,7 +147,7 @@ pub fn update_title(
     title: Option<&str>,
     status: TitleStatus,
 ) -> Result<()> {
-    let sql = if matches!(status, TitleStatus::Ok) {
+    let sql = if matches!(status, TitleStatus::Ok | TitleStatus::Pending) {
         "UPDATE queue_items SET title = ?, title_status = ?, title_error = NULL WHERE id = ?"
     } else {
         "UPDATE queue_items SET title = ?, title_status = ? WHERE id = ?"
@@ -636,9 +639,8 @@ pub fn replace_placeholder_with_children(
         let dest = child.dest_dir.to_string_lossy().to_string();
         let kind = child.kind.as_str();
         let idx_i64: i64 = i64::try_from(i).unwrap_or(i64::MAX);
-        let order = placeholder_display_order.saturating_add(
-            stride.saturating_mul(idx_i64.saturating_add(1)),
-        );
+        let order = placeholder_display_order
+            .saturating_add(stride.saturating_mul(idx_i64.saturating_add(1)));
 
         let n_rows = tx.execute(
             "INSERT OR IGNORE INTO queue_items (

@@ -115,6 +115,14 @@ struct FakeBehavior {
     /// UC 27 per-call metadata outcomes (FIFO). When empty, the fake
     /// returns a stock `VideoMetadata` with `title = "Real Title"`.
     metadata_outcomes: Vec<MetadataFakeOutcome>,
+    /// UC 27: when set, `fetch_metadata_cancellable` sleeps this long
+    /// before resolving its outcome, racing the dwell against the
+    /// cancel notify. Lets tests park the metadata fetch in-flight so
+    /// `cancel_one` can fire the metadata cancel token and observe the
+    /// `BridgeError::Cancelled` branch in `spawn_enumeration_task`.
+    /// When `None`, the fake resolves immediately (matching previous
+    /// behaviour so legacy tests stay green).
+    metadata_resolve_dwell: Option<Duration>,
     /// UC 27: counts the number of `enumerate_playlist_cancellable` calls
     /// the fake has observed. Used by re-spawn tests to verify that
     /// startup recovery / Restart paths re-issue enumeration.
@@ -402,15 +410,23 @@ impl BridgeOps for FakeBridge {
     ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<VideoMetadata>> + Send {
         let behavior = self.behavior.clone();
         async move {
-            let outcome = {
+            let (dwell, outcome) = {
                 let mut b = behavior.lock().await;
-                if b.metadata_outcomes.is_empty() {
+                let outcome = if b.metadata_outcomes.is_empty() {
                     None
                 } else {
                     Some(b.metadata_outcomes.remove(0))
-                }
+                };
+                (b.metadata_resolve_dwell, outcome)
             };
-            let _ = cancel; // metadata fetch resolves synchronously in the fake
+            if let Some(d) = dwell {
+                tokio::select! {
+                    () = tokio::time::sleep(d) => {}
+                    () = cancel.notified() => {
+                        return Err(BridgeError::Cancelled);
+                    }
+                }
+            }
             match outcome {
                 Some(MetadataFakeOutcome::Ok(m)) => Ok(m),
                 Some(MetadataFakeOutcome::AuthRequired { stderr_tail }) => {
@@ -690,7 +706,10 @@ async fn add_url_surfaces_enumeration_error_on_row_not_as_add_error() {
             .unwrap()
             .expect("placeholder row exists");
         if matches!(row.title_status, TitleStatus::Error)
-            && row.title_error.as_deref().is_some_and(|m| m.contains("boom"))
+            && row
+                .title_error
+                .as_deref()
+                .is_some_and(|m| m.contains("boom"))
         {
             title_error_seen = true;
             break;
@@ -999,10 +1018,7 @@ async fn add_url_playlist_threads_audio_only_override_to_every_entry() {
             .db
             .with_conn(crate::db::queue::list_all)
             .expect("list_all");
-        if entry_urls
-            .iter()
-            .all(|u| items.iter().any(|i| i.url == *u))
-        {
+        if entry_urls.iter().all(|u| items.iter().any(|i| i.url == *u)) {
             break;
         }
     }
@@ -1395,9 +1411,15 @@ async fn requeue_pending_title_fetches_walks_pending_rows() {
 
 #[tokio::test]
 async fn fetch_title_error_records_title_error() {
+    // UC 27: single-video Add routes through
+    // `enumerate_playlist_cancellable` → `promote_placeholder_to_video` →
+    // `fetch_metadata_cancellable`. A metadata-stage error is surfaced as
+    // a row-level `title_error` with `title_status = Error`. We inject via
+    // `metadata_outcomes` (the new pipeline) rather than the legacy
+    // `fetch_error` field which the single-video Add path no longer hits.
     let env = setup(
         FakeBehavior {
-            fetch_error: Some("title fetch boom"),
+            metadata_outcomes: vec![MetadataFakeOutcome::Error("title fetch boom")],
             ..Default::default()
         },
         1,
@@ -1406,15 +1428,31 @@ async fn fetch_title_error_records_title_error() {
         .add_url("https://example.com/no-title".to_string(), None)
         .await
         .expect("add");
-    tokio::time::sleep(Duration::from_millis(80)).await;
-
-    let item = env
-        .db
-        .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/no-title"))
-        .unwrap()
-        .expect("row exists");
-    assert_eq!(item.title_status, crate::model::TitleStatus::Error);
-    assert!(item.title_error.is_some(), "error tail captured");
+    // Poll until the metadata-error path lands the row at (Error,
+    // title_error). 2 s budget covers slow CI process startup.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let row = env
+            .db
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/no-title"))
+            .unwrap()
+            .expect("row exists");
+        if matches!(row.title_status, crate::model::TitleStatus::Error)
+            && row
+                .title_error
+                .as_deref()
+                .is_some_and(|m| m.contains("title fetch boom"))
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() <= deadline,
+            "title_status never reached Error (current = {:?}, title_error = {:?})",
+            row.title_status,
+            row.title_error
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 
     env.bridge.release_one();
     tokio::time::sleep(Duration::from_millis(120)).await;
@@ -1462,9 +1500,7 @@ async fn add_url_returns_auth_required_when_expand_hits_bot_check() {
         drop(rx);
         let row = env
             .db
-            .with_conn(|c| {
-                crate::db::queue::find_by_url(c, "https://www.youtube.com/watch?v=test")
-            })
+            .with_conn(|c| crate::db::queue::find_by_url(c, "https://www.youtube.com/watch?v=test"))
             .unwrap()
             .expect("placeholder exists");
         if matches!(row.title_status, TitleStatus::Error) && row.title_error.is_some() {
@@ -1985,11 +2021,20 @@ async fn cancel_one_during_title_fetch_resets_title_status_to_pending() {
     // AC#4: cancelling a row whose `title_status = fetching` must kill the
     // metadata subprocess immediately and reset title_status to pending so
     // a future Restart re-issues the fetch cleanly.
+    //
+    // UC 27 routes single-video Adds through
+    // `fetch_metadata_cancellable`, so the dwell that holds the title
+    // fetch in-flight is `metadata_resolve_dwell` (delays the happy
+    // path) — `metadata_cancel_dwell` only gates the legacy
+    // `fetch_title_cancellable` mock which is no longer on the
+    // single-video Add path.
     let env = setup(
         FakeBehavior {
-            // Set a long dwell so cancel_one fires WHILE the cancellable
-            // title fetch is parked inside the fake.
-            metadata_cancel_dwell: Some(Duration::from_secs(5)),
+            // Park the metadata fetch long enough for cancel_one to fire
+            // WHILE it is resolving so the `BridgeError::Cancelled`
+            // branch in `spawn_enumeration_task` is the one that
+            // observes the cancel.
+            metadata_resolve_dwell: Some(Duration::from_secs(5)),
             ..Default::default()
         },
         0,
@@ -2055,9 +2100,18 @@ async fn cancel_one_on_in_flight_with_title_fetching_fires_both_tokens() {
     // Challenger flag A: a row that is BOTH in_flight (download spawned)
     // AND title_status = fetching (slow title fetch still resolving) must
     // have BOTH cancel tokens fired and land in `cancelled`.
+    //
+    // UC 27 reaches the `(InFlight, Fetching)` window via:
+    //   enumerate_playlist_cancellable (SingleVideo)
+    //   → promote_placeholder_to_video (row becomes auto-promotable)
+    //   → fetch_metadata_cancellable  ← parked here
+    // While the metadata fetch is parked, the queue runner can
+    // auto-promote the row to InFlight. We use `metadata_resolve_dwell`
+    // (delays the happy path) rather than `metadata_cancel_dwell`
+    // (which only gates the legacy `fetch_title_cancellable` mock).
     let env = setup(
         FakeBehavior {
-            metadata_cancel_dwell: Some(Duration::from_secs(5)),
+            metadata_resolve_dwell: Some(Duration::from_secs(5)),
             ..Default::default()
         },
         1,

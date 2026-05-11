@@ -123,10 +123,7 @@ fn video_metadata_deserializes_integer_duration() {
     let json = r#"{"title":"Sample","thumbnail":"https://example.com/t.jpg","duration":180}"#;
     let meta: VideoMetadata = serde_json::from_str(json).expect("deserialize");
     assert_eq!(meta.title.as_deref(), Some("Sample"));
-    assert_eq!(
-        meta.thumbnail.as_deref(),
-        Some("https://example.com/t.jpg")
-    );
+    assert_eq!(meta.thumbnail.as_deref(), Some("https://example.com/t.jpg"));
     assert_eq!(meta.duration_s, Some(180));
 }
 

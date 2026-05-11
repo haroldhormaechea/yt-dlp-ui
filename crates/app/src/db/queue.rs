@@ -4,7 +4,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, ToSql, params};
 
-use crate::model::{NewQueueItem, QueueItem, QueueStatus, TitleStatus};
+use crate::model::{NewQueueItem, PlaceholderKind, QueueItem, QueueStatus, TitleStatus};
 
 use super::{DbError, Result};
 
@@ -17,7 +17,8 @@ mod queue_tests;
 const SELECT_COLS: &str = "id, url, title, title_status, title_error, status,
         progress_pct, speed_bps, eta_s, error_msg,
         format_pref, dest_dir, created_at, started_at, finished_at,
-        thumbnail_path, size_bytes, downloaded_bytes, partial_file_path";
+        thumbnail_path, size_bytes, downloaded_bytes, partial_file_path,
+        kind, start_requested, display_order";
 
 /// Inserts a new queue item, returning the auto-assigned row id.
 ///
@@ -33,14 +34,24 @@ pub fn insert(conn: &Connection, item: NewQueueItem) -> Result<i64> {
     let format_pref = serde_json::to_string(&item.format_pref)?;
     let title_status = item.title_status.as_str();
     let dest = item.dest_dir.to_string_lossy().to_string();
+    let kind = item.kind.as_str();
 
     let sql = "INSERT INTO queue_items (
-        url, title, title_status, status, format_pref, dest_dir, created_at
-    ) VALUES (?, ?, ?, 'queued', ?, ?, CURRENT_TIMESTAMP)";
+        url, title, title_status, status, format_pref, dest_dir, created_at,
+        kind, start_requested, display_order
+    ) VALUES (?, ?, ?, 'queued', ?, ?, CURRENT_TIMESTAMP, ?, 0, ?)";
 
     let result = conn.execute(
         sql,
-        params![&item.url, &item.title, title_status, format_pref, dest],
+        params![
+            &item.url,
+            &item.title,
+            title_status,
+            format_pref,
+            dest,
+            kind,
+            item.display_order,
+        ],
     );
 
     match result {
@@ -64,7 +75,7 @@ pub fn list_all(conn: &Connection) -> Result<Vec<QueueItem>> {
     let sql = format!(
         "SELECT {SELECT_COLS}
          FROM queue_items
-         ORDER BY created_at ASC, id ASC"
+         ORDER BY display_order ASC, id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([])?;
@@ -368,11 +379,15 @@ pub fn clear_for_restart(conn: &Connection, id: i64) -> Result<()> {
 ///
 /// Returns [`DbError::Sqlite`] on any DB failure.
 pub fn try_promote_to_in_flight(conn: &Connection, id: i64) -> Result<bool> {
+    // UC 27: gate on `kind = 'video'` so a `pending` placeholder is never
+    // promoted. If `cancel_one` / `cancel_all` ever flips the `kind` of a
+    // resolving placeholder this column would shut auto-promotion down at
+    // the SQL layer.
     let n = conn.execute(
         "UPDATE queue_items
          SET status = 'in_flight',
              started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
-         WHERE id = ? AND status = 'queued'",
+         WHERE id = ? AND status = 'queued' AND kind = 'video'",
         [id],
     )?;
     Ok(n == 1)
@@ -404,11 +419,15 @@ pub fn revert_in_flight_to_queued(conn: &Connection) -> Result<usize> {
 ///
 /// Returns [`DbError::Sqlite`] on any DB failure.
 pub fn list_queued(conn: &Connection) -> Result<Vec<QueueItem>> {
+    // UC 27: only `kind = 'video'` rows are auto-promotable. Pending
+    // placeholders stay in `queued` after the user clicks Start
+    // (`start_requested = 1`) but never enter the auto-promote pool — they
+    // need enumeration to finish first.
     let sql = format!(
         "SELECT {SELECT_COLS}
          FROM queue_items
-         WHERE status = 'queued'
-         ORDER BY created_at ASC, id ASC"
+         WHERE status = 'queued' AND kind = 'video'
+         ORDER BY display_order ASC, id ASC"
     );
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([])?;
@@ -463,6 +482,210 @@ pub fn list_pending_thumbnail_fetches(conn: &Connection) -> Result<Vec<QueueItem
     Ok(out)
 }
 
+/// UC 27. Returns the maximum `display_order` currently in `queue_items`
+/// (0 when the table is empty). Used at app startup to seed the in-memory
+/// `AtomicU64` so per-process placeholder allocations stay strictly
+/// monotonically increasing across restarts.
+///
+/// # Errors
+///
+/// Returns [`DbError::Sqlite`] on any DB failure.
+pub fn max_display_order(conn: &Connection) -> Result<i64> {
+    let v: Option<i64> = conn
+        .query_row(
+            "SELECT COALESCE(MAX(display_order), 0) FROM queue_items",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(v.unwrap_or(0))
+}
+
+/// UC 27. Returns rows whose `kind = 'pending'` — placeholder rows whose
+/// enumeration did not complete before the previous shutdown. Used by the
+/// app's startup re-issue path to spawn fresh enumeration tasks.
+///
+/// # Errors
+///
+/// Returns [`DbError::Sqlite`] on any DB failure.
+pub fn list_pending_enumerations(conn: &Connection) -> Result<Vec<QueueItem>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS}
+         FROM queue_items
+         WHERE kind = 'pending'"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(decode_row(row)?);
+    }
+    Ok(out)
+}
+
+/// UC 27. Flips a `pending` placeholder to `video` once single-video
+/// enumeration confirms there is no playlist expansion to do. Also clears
+/// `start_requested` so the queue runner's auto-promotion path picks the
+/// row up cleanly (the latched intent has been honoured by the side-effect
+/// `wake()` the caller issues).
+///
+/// # Errors
+///
+/// Returns [`DbError::Sqlite`] on any DB failure.
+pub fn promote_placeholder_to_video(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE queue_items
+         SET kind = 'video',
+             start_requested = 0
+         WHERE id = ?",
+        [id],
+    )?;
+    Ok(())
+}
+
+/// UC 27. Records `start_requested` for a `pending` row so the Slint
+/// template can flip the Download button to a disabled "Starting…" affordance
+/// without an extra row-state machine in Rust.
+///
+/// # Errors
+///
+/// Returns [`DbError::Sqlite`] on any DB failure.
+pub fn set_start_requested(conn: &Connection, id: i64, value: bool) -> Result<()> {
+    let val: i64 = i64::from(value);
+    conn.execute(
+        "UPDATE queue_items SET start_requested = ? WHERE id = ?",
+        params![val, id],
+    )?;
+    Ok(())
+}
+
+/// UC 27. Resets a `pending` placeholder back to a fresh `queued` state so
+/// the manager can re-spawn its enumeration task without losing the row's
+/// `display_order`. Mirrors [`clear_for_restart`] but keeps the row in the
+/// `pending` kind. Title fetch state is cleared so the second run produces
+/// a clean fetch.
+///
+/// # Errors
+///
+/// Returns [`DbError::Sqlite`] on any DB failure.
+pub fn clear_for_restart_placeholder(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE queue_items
+         SET status = 'queued',
+             title_status = 'pending',
+             title_error = NULL,
+             error_msg = NULL,
+             progress_pct = NULL,
+             speed_bps = NULL,
+             eta_s = NULL,
+             downloaded_bytes = NULL,
+             started_at = NULL,
+             finished_at = NULL
+         WHERE id = ?",
+        [id],
+    )?;
+    Ok(())
+}
+
+/// UC 27 transactional placeholder → playlist-children replacement.
+///
+/// Deletes the placeholder row in `id`, then for each entry in `children`
+/// computes a sub-stride-allocated `display_order` so all freshly-inserted
+/// rows land between the placeholder's old slot and the next neighbouring
+/// allocation. `INSERT OR IGNORE` silently drops URLs that already exist
+/// in the queue; for each entry the function returns the row id (either
+/// the just-inserted id or the pre-existing winner) along with a tag.
+///
+/// `placeholder_display_order` is the placeholder's pre-existing slot; the
+/// allocation stride is `2^20 / (children.len() + 1)` so up to ~1M children
+/// fit between the old slot and the next 2^20 boundary (the manager seeds
+/// its in-memory counter with 2^20 gaps per Add).
+///
+/// # Errors
+///
+/// Returns [`DbError::Sqlite`] on any DB failure or [`DbError::Json`] for a
+/// format-pref serialization failure.
+pub fn replace_placeholder_with_children(
+    conn: &mut Connection,
+    placeholder_id: i64,
+    placeholder_display_order: i64,
+    children: &[NewQueueItem],
+) -> Result<Vec<(usize, i64, InsertedOrPreexisting)>> {
+    let tx = conn.transaction()?;
+
+    tx.execute("DELETE FROM queue_items WHERE id = ?", [placeholder_id])?;
+
+    // Stride is sized so each child gets a unique slot strictly between the
+    // placeholder's slot and the next neighbouring allocation (Add advances
+    // the manager's counter by 2^20). `stride = 2^20 / (N + 1)` keeps all N
+    // slots > placeholder_display_order and < placeholder_display_order + 2^20.
+    let stride: i64 = if children.is_empty() {
+        0
+    } else {
+        let n: i64 = i64::try_from(children.len()).unwrap_or(i64::MAX);
+        let denom = n.checked_add(1).unwrap_or(i64::MAX);
+        let s = 1_048_576i64 / denom;
+        if s == 0 { 1 } else { s }
+    };
+
+    let mut out: Vec<(usize, i64, InsertedOrPreexisting)> = Vec::with_capacity(children.len());
+
+    for (i, child) in children.iter().enumerate() {
+        let format_pref = serde_json::to_string(&child.format_pref)?;
+        let title_status = child.title_status.as_str();
+        let dest = child.dest_dir.to_string_lossy().to_string();
+        let kind = child.kind.as_str();
+        let idx_i64: i64 = i64::try_from(i).unwrap_or(i64::MAX);
+        let order = placeholder_display_order.saturating_add(
+            stride.saturating_mul(idx_i64.saturating_add(1)),
+        );
+
+        let n_rows = tx.execute(
+            "INSERT OR IGNORE INTO queue_items (
+                url, title, title_status, status, format_pref, dest_dir, created_at,
+                kind, start_requested, display_order
+            ) VALUES (?, ?, ?, 'queued', ?, ?, CURRENT_TIMESTAMP, ?, 0, ?)",
+            params![
+                &child.url,
+                &child.title,
+                title_status,
+                format_pref,
+                dest,
+                kind,
+                order,
+            ],
+        )?;
+
+        // After INSERT OR IGNORE the row id is in `last_insert_rowid` only
+        // when a row was actually inserted; otherwise we look up the
+        // pre-existing winner by URL.
+        let (row_id, tag) = if n_rows == 1 {
+            (tx.last_insert_rowid(), InsertedOrPreexisting::Inserted)
+        } else {
+            let existing_id: i64 = tx.query_row(
+                "SELECT id FROM queue_items WHERE url = ? LIMIT 1",
+                [&child.url],
+                |r| r.get(0),
+            )?;
+            (existing_id, InsertedOrPreexisting::Preexisting)
+        };
+        out.push((i, row_id, tag));
+    }
+
+    tx.commit()?;
+    Ok(out)
+}
+
+/// UC 27. Tag returned alongside each child id from
+/// [`replace_placeholder_with_children`] so the caller can distinguish
+/// freshly-inserted children (which need UI upserts + title/thumbnail
+/// fetch fan-out) from pre-existing duplicates already rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertedOrPreexisting {
+    Inserted,
+    Preexisting,
+}
+
 fn decode_row(row: &rusqlite::Row<'_>) -> Result<QueueItem> {
     let id: i64 = row.get(0)?;
     let url: String = row.get(1)?;
@@ -483,12 +706,17 @@ fn decode_row(row: &rusqlite::Row<'_>) -> Result<QueueItem> {
     let size_bytes: Option<i64> = row.get(16)?;
     let downloaded_bytes: Option<i64> = row.get(17)?;
     let partial_file_path: Option<String> = row.get(18)?;
+    let kind_raw: String = row.get(19)?;
+    let start_requested_raw: i64 = row.get(20)?;
+    let display_order: i64 = row.get(21)?;
 
     let title_status = TitleStatus::parse(&title_status_raw)
         .map_err(|s| DbError::Decode(format!("title_status={s}")))?;
     let status =
         QueueStatus::parse(&status_raw).map_err(|s| DbError::Decode(format!("status={s}")))?;
     let format_pref = serde_json::from_str(&format_pref_raw)?;
+    let kind =
+        PlaceholderKind::parse(&kind_raw).map_err(|s| DbError::Decode(format!("kind={s}")))?;
 
     Ok(QueueItem {
         id,
@@ -511,5 +739,8 @@ fn decode_row(row: &rusqlite::Row<'_>) -> Result<QueueItem> {
         size_bytes: size_bytes.and_then(|v| u64::try_from(v).ok()),
         downloaded_bytes: downloaded_bytes.and_then(|v| u64::try_from(v).ok()),
         partial_file_path: partial_file_path.map(std::path::PathBuf::from),
+        kind,
+        start_requested: start_requested_raw != 0,
+        display_order,
     })
 }

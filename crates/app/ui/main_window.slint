@@ -9,7 +9,7 @@
 // popup, deno banner, flash) and re-themes everything via DesignTokens.
 
 import { ListView } from "std-widgets.slint";
-import { DesignTokens } from "design/tokens.slint";
+import { DesignTokens, Clock } from "design/tokens.slint";
 import { Button as DButton, Toast, Icon } from "design/components.slint";
 import { _ComponentSmoke } from "design/_component_smoke.slint";
 import { Icons } from "icons.slint";
@@ -21,7 +21,7 @@ import { SettingsPanel } from "settings_panel.slint";
 import { BotCheckModal } from "bot_check_modal.slint";
 import { AboutModal, AboutEntry } from "about_modal.slint";
 import { RemoveAllConfirmModal } from "remove_all_confirm_modal.slint";
-export { DesignTokens, QueueRow, _ComponentSmoke, AboutEntry }
+export { DesignTokens, Clock, QueueRow, _ComponentSmoke, AboutEntry }
 
 // UC 11: ToastEntry — one row per toast in the in-memory model the host
 // (Rust ui_bridge) owns. Lives at module scope so Slint codegen produces a

@@ -1,6 +1,6 @@
 //! Tests for [`crate::model`] helpers.
 
-use crate::model::split_pasted_urls;
+use crate::model::{PlaceholderKind, split_pasted_urls};
 
 #[test]
 fn single_url_returns_one_entry() {
@@ -81,4 +81,29 @@ fn carriage_return_lf_handled_via_trim() {
             "https://example.com/b".to_string(),
         ]
     );
+}
+
+// -- UC 27: PlaceholderKind --------------------------------------------
+
+#[test]
+fn placeholder_kind_round_trips_via_as_str_and_parse() {
+    for kind in [PlaceholderKind::Video, PlaceholderKind::Pending] {
+        let s = kind.as_str();
+        let parsed = PlaceholderKind::parse(s).expect("known variant parses cleanly");
+        assert_eq!(parsed, kind, "round-trip via as_str() / parse() must match");
+    }
+}
+
+#[test]
+fn placeholder_kind_as_str_matches_sql_column_strings() {
+    // SQL CHECK constraint mirrors these strings exactly. Keeping the
+    // assertion explicit pins the contract against accidental rename.
+    assert_eq!(PlaceholderKind::Video.as_str(), "video");
+    assert_eq!(PlaceholderKind::Pending.as_str(), "pending");
+}
+
+#[test]
+fn placeholder_kind_parse_rejects_unknown_variants() {
+    let err = PlaceholderKind::parse("bogus").expect_err("unknown string must fail");
+    assert_eq!(err, "bogus", "error surfaces the offending input");
 }

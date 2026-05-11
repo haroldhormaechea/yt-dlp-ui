@@ -219,6 +219,16 @@ pub fn run() -> Result<(), AppError> {
         }
     });
 
+    // UC 27: re-issue enumeration for placeholder rows that did not
+    // resolve before the previous shutdown. The row stays `kind = 'pending'`
+    // until enumeration completes, so it cannot be auto-promoted by the
+    // download runner — safe to call before / after `wake()`.
+    runtime.block_on(async {
+        if let Err(err) = manager.requeue_pending_enumerations().await {
+            tracing::warn!(?err, "failed to re-issue pending enumerations");
+        }
+    });
+
     // 7. Smoke-mode short-circuit.
     if std::env::var("YT_DLP_UI_SMOKE").is_ok() {
         let initial_rows = runtime.block_on(async { manager.list_ui_rows().await });
@@ -381,7 +391,31 @@ fn run_ui(
         ui_bridge::run_ui_bridge(weak, ui_rx).await;
     });
 
+    // UC 27: wall-clock global timer for the placeholder's 5-second "Still
+    // fetching info…" affordance. Fires every ~500 ms and writes
+    // `Clock.current-now-ms`. Slint Timer fires on the UI thread, so the
+    // global write is allocation-free. The timer keeps running for the
+    // lifetime of the window — the cost is one i32 write every 500 ms,
+    // which is well below the budget.
+    let weak_clock = window.as_weak();
+    let clock_timer = slint::Timer::default();
+    clock_timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(500),
+        move || {
+            if let Some(w) = weak_clock.upgrade() {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let now_ms = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0u128, |d| d.as_millis())
+                    & u128::from(u32::MAX)) as i32;
+                w.global::<Clock<'_>>().set_current_now_ms(now_ms);
+            }
+        },
+    );
+
     window.run().map_err(|e| AppError::Ui(e.to_string()))?;
+    drop(clock_timer);
     Ok(())
 }
 
@@ -406,6 +440,15 @@ fn to_slint_row(row: model::UiQueueRow) -> QueueRow {
     let size_text = formats::format_size(row.size_bytes);
     let downloaded_text = formats::format_size(row.downloaded_bytes);
 
+    // UC 27: clamp i64 epoch ms into Slint's i32 row field. The row stores
+    // an i32 because Slint structs are codegen'd from .slint and float/int
+    // are 32-bit there. We compute (now_ms - placeholder_created_at_ms) on
+    // the Slint side against a `current-now-ms` global, so storing only a
+    // small offset would work — but storing the raw ms (modulo i32::MAX)
+    // is simpler. The 5-second comparison wraps around every ~24.8 days,
+    // which is well beyond any plausible placeholder lifetime.
+    #[allow(clippy::cast_possible_truncation)]
+    let placeholder_started_at_ms = (row.created_at_unix_ms & i64::from(i32::MAX)) as i32;
     QueueRow {
         id: i32::try_from(row.id).unwrap_or(i32::MAX),
         url: row.url.into(),
@@ -424,6 +467,10 @@ fn to_slint_row(row: model::UiQueueRow) -> QueueRow {
         seed: seed_val,
         thumbnail_path: thumbnail_image,
         thumbnail_loaded,
+        kind: row.kind.as_str().into(),
+        start_requested: row.start_requested,
+        display_order: i32::try_from(row.display_order).unwrap_or(i32::MAX),
+        placeholder_started_at_ms,
     }
 }
 

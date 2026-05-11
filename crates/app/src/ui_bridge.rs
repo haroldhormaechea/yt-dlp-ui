@@ -20,7 +20,7 @@ use crate::formats;
 use crate::model::{UiQueueRow, split_pasted_urls};
 use crate::ui_row_for_test;
 use crate::url_open;
-use crate::{DesignTokens, MainWindow, QueueRow, ToastEntry, VENDOR_PRIVACY_URL};
+use crate::{Clock, DesignTokens, MainWindow, QueueRow, ToastEntry, VENDOR_PRIVACY_URL};
 
 /// UC 11: monotonically-increasing id source for toast entries.
 ///
@@ -226,6 +226,59 @@ fn apply_event(weak: &Weak<MainWindow>, event: UiEvent) {
         UiEvent::ThumbnailReady { id, path } => {
             set_row_thumbnail(&window, i32::try_from(id).unwrap_or(0), &path);
         }
+        UiEvent::RowReplacedWithChildren {
+            placeholder_id,
+            children,
+        } => {
+            replace_row_with_children(
+                &window,
+                i32::try_from(placeholder_id).unwrap_or(0),
+                children,
+            );
+            recompute_counts(&window);
+        }
+    }
+}
+
+/// UC 27. Atomically replaces a placeholder row in the Slint `VecModel`
+/// with N freshly-inserted playlist children. The placeholder is removed
+/// first; the children are then inserted in playlist order at the
+/// placeholder's old index. If the placeholder is no longer present
+/// (already removed concurrently), the children are appended at the end
+/// — preserves the "never lose a row" posture.
+fn replace_row_with_children(
+    window: &MainWindow,
+    placeholder_id: i32,
+    children: Vec<crate::model::UiQueueRow>,
+) {
+    let model = window.get_queue();
+    let Some(vec_model) = model.as_any().downcast_ref::<VecModel<QueueRow>>() else {
+        tracing::warn!("queue model is not a VecModel; cannot replace placeholder");
+        return;
+    };
+    // Locate the placeholder.
+    let mut idx: Option<usize> = None;
+    for i in 0..vec_model.row_count() {
+        if let Some(row) = vec_model.row_data(i)
+            && row.id == placeholder_id
+        {
+            idx = Some(i);
+            break;
+        }
+    }
+    if let Some(i) = idx {
+        vec_model.remove(i);
+    }
+    let insert_at = idx.unwrap_or_else(|| vec_model.row_count());
+    let mut current = insert_at;
+    for child in children {
+        let slint_row = crate::ui_row_for_test(child);
+        if current <= vec_model.row_count() {
+            vec_model.insert(current, slint_row);
+        } else {
+            vec_model.push(slint_row);
+        }
+        current += 1;
     }
 }
 
@@ -298,10 +351,14 @@ fn recompute_counts(window: &MainWindow) {
     let mut waiting = 0i32;
     let mut cancelled = 0i32;
     let mut error = 0i32;
+    let mut pending_placeholders = 0i32;
     for i in 0..model.row_count() {
         if let Some(row) = model.row_data(i) {
             if row.waiting_on_user {
                 waiting += 1;
+            }
+            if row.kind.as_str() == "pending" {
+                pending_placeholders += 1;
             }
             match row.status.as_str() {
                 "in_flight" => active += 1,
@@ -319,6 +376,11 @@ fn recompute_counts(window: &MainWindow) {
     window.set_waiting_count(waiting);
     window.set_cancelled_count(cancelled);
     window.set_error_count(error);
+    // UC 27: drive the Slint timer's gate so a quiet app (no pending
+    // placeholders) does not pay the wall-clock-update cost.
+    window
+        .global::<Clock<'_>>()
+        .set_pending_placeholder_count(pending_placeholders);
     let busy = window.get_start_all_busy();
     let tooltip = compute_start_all_tooltip(queued, cancelled, error, busy);
     window.set_start_all_tooltip(SharedString::from(tooltip));
@@ -655,9 +717,16 @@ pub fn wire_callbacks(
     }
 
     {
+        // UC 27: `start_one` is now async (it may set `start_requested = 1`
+        // on a `pending` placeholder and emit a row event). Spawn onto the
+        // tokio runtime so the Slint callback returns immediately.
         let manager = manager.clone();
+        let rt = rt.clone();
         window.on_start_one(move |id| {
-            manager.start_one(i64::from(id));
+            let manager = manager.clone();
+            rt.spawn(async move {
+                manager.start_one(i64::from(id)).await;
+            });
         });
     }
 

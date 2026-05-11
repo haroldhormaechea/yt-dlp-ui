@@ -8,7 +8,8 @@ use yt_dlp_bridge::FormatPref;
 use crate::db::DbError;
 use crate::db::migrations::run_migrations;
 use crate::db::queue;
-use crate::model::{NewQueueItem, QueueStatus, TitleStatus};
+use crate::db::queue::InsertedOrPreexisting;
+use crate::model::{NewQueueItem, PlaceholderKind, QueueStatus, TitleStatus};
 
 fn fresh_db() -> Connection {
     let mut conn = Connection::open_in_memory().expect("open :memory:");
@@ -23,6 +24,20 @@ fn make_item(url: &str) -> NewQueueItem {
         title_status: TitleStatus::Pending,
         format_pref: FormatPref::BestHeuristic,
         dest_dir: PathBuf::from("/tmp/dl"),
+        kind: PlaceholderKind::Video,
+        display_order: 0,
+    }
+}
+
+fn make_pending(url: &str) -> NewQueueItem {
+    NewQueueItem {
+        url: url.to_string(),
+        title: None,
+        title_status: TitleStatus::Fetching,
+        format_pref: FormatPref::BestHeuristic,
+        dest_dir: PathBuf::from("/tmp/dl"),
+        kind: PlaceholderKind::Pending,
+        display_order: 0,
     }
 }
 
@@ -596,4 +611,337 @@ fn update_dest_dir_no_op_on_other_terminal_states() {
             "row in status {status:?} must NOT have its dest_dir rewritten by `update_dest_dir`"
         );
     }
+}
+
+// -- UC 27: placeholder rows ---------------------------------------------
+
+#[test]
+fn insert_round_trips_kind_start_requested_and_display_order() {
+    // The three new columns ride through INSERT → SELECT untouched.
+    let conn = fresh_db();
+    let mut item = make_pending("https://example.com/uc27-rt");
+    item.display_order = 4_096;
+    let id = queue::insert(&conn, item).unwrap();
+    assert!(id > 0);
+
+    let row = queue::find_by_url(&conn, "https://example.com/uc27-rt")
+        .unwrap()
+        .expect("row exists");
+    assert_eq!(row.kind, PlaceholderKind::Pending);
+    assert!(
+        !row.start_requested,
+        "freshly-inserted rows default to start_requested = false"
+    );
+    assert_eq!(row.display_order, 4_096);
+}
+
+#[test]
+fn insert_defaults_existing_callers_to_video_kind_and_video_gate() {
+    // A `Video`-kind row inserted via `make_item` lands on the auto-promote
+    // path of `list_queued` / `try_promote_to_in_flight`.
+    let conn = fresh_db();
+    let _id = queue::insert(&conn, make_item("https://example.com/v1")).unwrap();
+    let queued = queue::list_queued(&conn).unwrap();
+    assert_eq!(queued.len(), 1, "video row appears in list_queued");
+
+    let promoted = queue::try_promote_to_in_flight(&conn, queued[0].id).unwrap();
+    assert!(promoted, "video kind must be promotable");
+}
+
+#[test]
+fn list_queued_excludes_pending_kind() {
+    // UC 27: pending placeholders never appear in list_queued — they need
+    // enumeration to finish before they become auto-promotable.
+    let conn = fresh_db();
+    queue::insert(&conn, make_pending("https://example.com/ph")).unwrap();
+    queue::insert(&conn, make_item("https://example.com/v")).unwrap();
+    let queued = queue::list_queued(&conn).unwrap();
+    let urls: Vec<&str> = queued.iter().map(|r| r.url.as_str()).collect();
+    assert_eq!(urls, vec!["https://example.com/v"]);
+}
+
+#[test]
+fn try_promote_to_in_flight_refuses_pending_kind() {
+    // UC 27: SQL `WHERE kind = 'video'` gate. A pending row is never
+    // promoted by the auto-runner, even when status = 'queued'.
+    let conn = fresh_db();
+    let id = queue::insert(&conn, make_pending("https://example.com/ph")).unwrap();
+    let promoted = queue::try_promote_to_in_flight(&conn, id).unwrap();
+    assert!(!promoted, "pending kind must NOT be promoted");
+
+    let row = queue::find_by_url(&conn, "https://example.com/ph")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.status,
+        QueueStatus::Queued,
+        "status untouched on refused promotion"
+    );
+    assert_eq!(row.kind, PlaceholderKind::Pending);
+}
+
+#[test]
+fn promote_placeholder_to_video_flips_kind_and_clears_start_requested() {
+    let conn = fresh_db();
+    let id = queue::insert(&conn, make_pending("https://example.com/promote")).unwrap();
+    queue::set_start_requested(&conn, id, true).unwrap();
+
+    queue::promote_placeholder_to_video(&conn, id).unwrap();
+    let row = queue::find_by_url(&conn, "https://example.com/promote")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.kind, PlaceholderKind::Video);
+    assert!(
+        !row.start_requested,
+        "start_requested must reset on promotion"
+    );
+}
+
+#[test]
+fn set_start_requested_round_trips_bool() {
+    let conn = fresh_db();
+    let id = queue::insert(&conn, make_pending("https://example.com/sr")).unwrap();
+    let row = queue::find_by_url(&conn, "https://example.com/sr")
+        .unwrap()
+        .unwrap();
+    assert!(!row.start_requested);
+
+    queue::set_start_requested(&conn, id, true).unwrap();
+    let row = queue::find_by_url(&conn, "https://example.com/sr")
+        .unwrap()
+        .unwrap();
+    assert!(row.start_requested);
+
+    queue::set_start_requested(&conn, id, false).unwrap();
+    let row = queue::find_by_url(&conn, "https://example.com/sr")
+        .unwrap()
+        .unwrap();
+    assert!(!row.start_requested);
+}
+
+#[test]
+fn clear_for_restart_placeholder_resets_fields_but_keeps_kind_pending() {
+    // UC 27: Restart of a placeholder zeroes progress / error fields but
+    // keeps `kind = 'pending'` so the manager can re-spawn enumeration.
+    let conn = fresh_db();
+    let id = queue::insert(&conn, make_pending("https://example.com/restart-ph")).unwrap();
+    queue::update_status(&conn, id, QueueStatus::Cancelled).unwrap();
+    queue::set_error_msg(&conn, id, "before-restart").unwrap();
+    queue::set_title_error(&conn, id, "title-before").unwrap();
+
+    queue::clear_for_restart_placeholder(&conn, id).unwrap();
+
+    let row = queue::find_by_url(&conn, "https://example.com/restart-ph")
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.status, QueueStatus::Queued);
+    assert_eq!(row.kind, PlaceholderKind::Pending, "kind stays pending");
+    assert_eq!(row.title_status, TitleStatus::Pending);
+    assert!(row.title_error.is_none(), "title_error cleared");
+    assert!(row.error_msg.is_none(), "error_msg cleared");
+    assert!(row.started_at.is_none());
+    assert!(row.finished_at.is_none());
+}
+
+#[test]
+fn list_pending_enumerations_returns_only_pending_kind() {
+    // UC 27: startup recovery seeds enumeration re-issue from this view.
+    let conn = fresh_db();
+    let id_ph_a = queue::insert(&conn, make_pending("https://example.com/ph-a")).unwrap();
+    let _id_ph_b = queue::insert(&conn, make_pending("https://example.com/ph-b")).unwrap();
+    let _id_v = queue::insert(&conn, make_item("https://example.com/video")).unwrap();
+
+    let pending = queue::list_pending_enumerations(&conn).unwrap();
+    let urls: Vec<&str> = pending.iter().map(|r| r.url.as_str()).collect();
+    assert_eq!(pending.len(), 2, "exactly two pending placeholders");
+    assert!(urls.contains(&"https://example.com/ph-a"));
+    assert!(urls.contains(&"https://example.com/ph-b"));
+    assert!(!urls.contains(&"https://example.com/video"));
+    let _ = id_ph_a;
+}
+
+#[test]
+fn max_display_order_returns_zero_on_empty_table() {
+    let conn = fresh_db();
+    let v = queue::max_display_order(&conn).unwrap();
+    assert_eq!(v, 0);
+}
+
+#[test]
+fn max_display_order_picks_up_highest_value() {
+    let conn = fresh_db();
+    for (i, url) in [
+        "https://example.com/a",
+        "https://example.com/b",
+        "https://example.com/c",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut item = make_item(url);
+        item.display_order = (i as i64 + 1) * 1_048_576;
+        queue::insert(&conn, item).unwrap();
+    }
+    let v = queue::max_display_order(&conn).unwrap();
+    assert_eq!(v, 3 * 1_048_576);
+}
+
+#[test]
+fn replace_placeholder_with_children_happy_path() {
+    // UC 27: placeholder row is deleted, N children inserted with
+    // display_order slots strictly inside the placeholder's old range.
+    let mut conn = fresh_db();
+    let mut placeholder = make_pending("https://example.com/playlist");
+    placeholder.display_order = 1_048_576; // one stride
+    let ph_id = queue::insert(&conn, placeholder).unwrap();
+
+    let children = vec![
+        NewQueueItem {
+            url: "https://example.com/c1".to_string(),
+            title: Some("c1".to_string()),
+            title_status: TitleStatus::Ok,
+            format_pref: FormatPref::BestHeuristic,
+            dest_dir: PathBuf::from("/tmp/dl"),
+            kind: PlaceholderKind::Video,
+            display_order: 0,
+        },
+        NewQueueItem {
+            url: "https://example.com/c2".to_string(),
+            title: Some("c2".to_string()),
+            title_status: TitleStatus::Ok,
+            format_pref: FormatPref::BestHeuristic,
+            dest_dir: PathBuf::from("/tmp/dl"),
+            kind: PlaceholderKind::Video,
+            display_order: 0,
+        },
+    ];
+
+    let out = queue::replace_placeholder_with_children(&mut conn, ph_id, 1_048_576, &children)
+        .unwrap();
+    assert_eq!(out.len(), 2);
+    for (_, _, tag) in &out {
+        assert!(matches!(tag, InsertedOrPreexisting::Inserted));
+    }
+
+    // Placeholder is gone.
+    assert!(
+        queue::find_by_url(&conn, "https://example.com/playlist")
+            .unwrap()
+            .is_none(),
+        "placeholder row deleted"
+    );
+    // Children are present, each with kind = Video and display_order strictly
+    // inside (placeholder_display_order, placeholder_display_order + stride).
+    let c1 = queue::find_by_url(&conn, "https://example.com/c1")
+        .unwrap()
+        .unwrap();
+    let c2 = queue::find_by_url(&conn, "https://example.com/c2")
+        .unwrap()
+        .unwrap();
+    assert_eq!(c1.kind, PlaceholderKind::Video);
+    assert_eq!(c2.kind, PlaceholderKind::Video);
+    assert!(
+        c1.display_order > 1_048_576 && c1.display_order < 2 * 1_048_576,
+        "c1 display_order ({}) inside placeholder slot",
+        c1.display_order
+    );
+    assert!(
+        c2.display_order > c1.display_order,
+        "children preserve playlist order via increasing display_order"
+    );
+}
+
+#[test]
+fn replace_placeholder_with_children_collides_via_insert_or_ignore() {
+    // UC 27: a playlist entry whose URL is already in the queue returns
+    // the pre-existing row id with `Preexisting` tag; freshly-inserted
+    // entries get `Inserted`. No transaction abort.
+    let mut conn = fresh_db();
+
+    // Seed an existing video row that will collide with the playlist.
+    let preexisting_id = queue::insert(&conn, make_item("https://example.com/collide")).unwrap();
+
+    // Placeholder for the playlist add.
+    let mut placeholder = make_pending("https://example.com/playlist");
+    placeholder.display_order = 1_048_576;
+    let ph_id = queue::insert(&conn, placeholder).unwrap();
+
+    let children = vec![
+        NewQueueItem {
+            url: "https://example.com/collide".to_string(),
+            title: Some("dup".to_string()),
+            title_status: TitleStatus::Ok,
+            format_pref: FormatPref::BestHeuristic,
+            dest_dir: PathBuf::from("/tmp/dl"),
+            kind: PlaceholderKind::Video,
+            display_order: 0,
+        },
+        NewQueueItem {
+            url: "https://example.com/fresh".to_string(),
+            title: Some("fresh".to_string()),
+            title_status: TitleStatus::Ok,
+            format_pref: FormatPref::BestHeuristic,
+            dest_dir: PathBuf::from("/tmp/dl"),
+            kind: PlaceholderKind::Video,
+            display_order: 0,
+        },
+    ];
+
+    let out = queue::replace_placeholder_with_children(&mut conn, ph_id, 1_048_576, &children)
+        .unwrap();
+    assert_eq!(out.len(), 2);
+
+    // Tag + id of the colliding entry == pre-existing row.
+    let (idx0, id0, tag0) = out[0];
+    assert_eq!(idx0, 0);
+    assert_eq!(
+        id0, preexisting_id,
+        "collision must return the pre-existing winner's row id"
+    );
+    assert!(
+        matches!(tag0, InsertedOrPreexisting::Preexisting),
+        "tag must be Preexisting on collision"
+    );
+
+    let (idx1, _id1, tag1) = out[1];
+    assert_eq!(idx1, 1);
+    assert!(
+        matches!(tag1, InsertedOrPreexisting::Inserted),
+        "tag must be Inserted for the non-colliding entry"
+    );
+
+    // Both URLs exist in the queue; the placeholder is gone.
+    assert!(
+        queue::find_by_url(&conn, "https://example.com/playlist")
+            .unwrap()
+            .is_none(),
+        "placeholder removed"
+    );
+    assert!(
+        queue::find_by_url(&conn, "https://example.com/collide")
+            .unwrap()
+            .is_some(),
+        "pre-existing collide row still present"
+    );
+    assert!(
+        queue::find_by_url(&conn, "https://example.com/fresh")
+            .unwrap()
+            .is_some(),
+        "fresh child inserted"
+    );
+}
+
+#[test]
+fn replace_placeholder_with_children_empty_input_removes_placeholder() {
+    // Edge case: enumeration returned no entries. The placeholder is still
+    // deleted; no children land.
+    let mut conn = fresh_db();
+    let ph_id = queue::insert(&conn, make_pending("https://example.com/playlist")).unwrap();
+    let out = queue::replace_placeholder_with_children(&mut conn, ph_id, 1_048_576, &[]).unwrap();
+    assert!(out.is_empty());
+    assert!(
+        queue::find_by_url(&conn, "https://example.com/playlist")
+            .unwrap()
+            .is_none()
+    );
 }

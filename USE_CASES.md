@@ -37,6 +37,6 @@ Statuses:
 | 24 | [use-cases/24-fix-windows-release-build.md](use-cases/24-fix-windows-release-build.md) | Fix Windows Release build (modern gpg via winget) | done | 2026-05-09 |
 | 25 | [use-cases/25-trim-release-assets-to-installers.md](use-cases/25-trim-release-assets-to-installers.md) | Trim release-pipeline assets to installers + provenance only | done | 2026-05-10 |
 | 26 | [use-cases/26-fix-macos-arm64-launch-failure.md](use-cases/26-fix-macos-arm64-launch-failure.md) | Fix macOS arm64 launch failure (Dock-bounce-and-die on macOS 26.x) | suspended | 2026-05-11 |
-| 27 | [use-cases/27-instant-skeleton-rows-on-add.md](use-cases/27-instant-skeleton-rows-on-add.md) | Instant skeleton rows on Add (optimistic placeholder cards) | in-progress | 2026-05-11 |
+| 27 | [use-cases/27-instant-skeleton-rows-on-add.md](use-cases/27-instant-skeleton-rows-on-add.md) | Instant skeleton rows on Add (optimistic placeholder cards) | done | 2026-05-11 |
 | 28 | [use-cases/28-bundle-ffprobe-and-verify-ffmpeg.md](use-cases/28-bundle-ffprobe-and-verify-ffmpeg.md) | Bundle ffprobe (and verify ffmpeg) for audio-only post-processing | done | 2026-05-11 |
 | 29 | [use-cases/29-fix-addbar-url-input-clipping.md](use-cases/29-fix-addbar-url-input-clipping.md) | Fix AddBar URL input text clipping | done | 2026-05-11 |

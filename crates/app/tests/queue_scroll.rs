@@ -15,7 +15,7 @@
 //! (queue scroll)" — the brief's MVP testing posture explicitly defers
 //! true UI automation.
 
-use app::model::{QueueStatus, TitleStatus, UiQueueRow};
+use app::model::{PlaceholderKind, QueueStatus, TitleStatus, UiQueueRow};
 use app::{MainWindow, ui_row_for_test};
 use slint::{Model, ModelRc, VecModel};
 use std::path::PathBuf;
@@ -48,6 +48,10 @@ fn make_row(id: i64) -> UiQueueRow {
         size_bytes: Some(10 * 1024 * 1024),
         downloaded_bytes: None,
         thumbnail_path: None,
+        kind: PlaceholderKind::Video,
+        start_requested: false,
+        display_order: 0,
+        created_at_unix_ms: 0,
     }
 }
 

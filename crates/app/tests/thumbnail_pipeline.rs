@@ -15,11 +15,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::sync::{Notify, mpsc};
-use yt_dlp_bridge::{BridgeError, DownloadEvent, DownloadRequest, FormatPref, PlaylistEntry};
+use yt_dlp_bridge::{
+    BridgeError, DownloadEvent, DownloadRequest, EnumerationOutcome, FormatPref, PlaylistEntry,
+    VideoMetadata,
+};
 
 use app::db::{Db, queue, settings};
 use app::download_mgr::{BridgeOps, DownloadManager, UiEvent};
-use app::model::{NewQueueItem, TitleStatus};
+use app::model::{NewQueueItem, PlaceholderKind, TitleStatus};
 
 /// `BridgeOps` impl that:
 /// - returns an empty playlist (single-video path) on `expand_playlist`,
@@ -102,6 +105,37 @@ impl BridgeOps for ThumbBridge {
         // title-fetch cancellable path is covered in `download_mgr_test.rs`.
         // Mirror `fetch_title`'s shape so the row's title resolves cleanly.
         Ok("title".to_string())
+    }
+
+    async fn enumerate_playlist_cancellable(
+        &self,
+        _url: &str,
+        _cookies_browser: Option<&str>,
+        _js_runtime_path: Option<&Path>,
+        _ffmpeg_path: Option<&Path>,
+        _cancel: Arc<Notify>,
+    ) -> yt_dlp_bridge::Result<EnumerationOutcome> {
+        // UC 27: this test exercises the single-video thumbnail pipeline,
+        // so report SingleVideo. The placeholder promotes to video and the
+        // metadata fetch fills the title in.
+        Ok(EnumerationOutcome::SingleVideo)
+    }
+
+    async fn fetch_metadata_cancellable(
+        &self,
+        _url: &str,
+        _cookies_browser: Option<&str>,
+        _js_runtime_path: Option<&Path>,
+        _ffmpeg_path: Option<&Path>,
+        _cancel: Arc<Notify>,
+    ) -> yt_dlp_bridge::Result<VideoMetadata> {
+        Ok(VideoMetadata {
+            title: Some("title".to_string()),
+            // No thumbnail here — the test exercises the per-row
+            // `fetch_thumbnail_url` fallback explicitly.
+            thumbnail: None,
+            duration_s: None,
+        })
     }
 }
 
@@ -354,6 +388,32 @@ impl BridgeOps for ConcurrencyTrackingBridge {
         // row's title isn't a moving part in the test.
         Ok("title".to_string())
     }
+
+    async fn enumerate_playlist_cancellable(
+        &self,
+        _url: &str,
+        _cookies_browser: Option<&str>,
+        _js_runtime_path: Option<&Path>,
+        _ffmpeg_path: Option<&Path>,
+        _cancel: Arc<Notify>,
+    ) -> yt_dlp_bridge::Result<EnumerationOutcome> {
+        Ok(EnumerationOutcome::SingleVideo)
+    }
+
+    async fn fetch_metadata_cancellable(
+        &self,
+        _url: &str,
+        _cookies_browser: Option<&str>,
+        _js_runtime_path: Option<&Path>,
+        _ffmpeg_path: Option<&Path>,
+        _cancel: Arc<Notify>,
+    ) -> yt_dlp_bridge::Result<VideoMetadata> {
+        Ok(VideoMetadata {
+            title: Some("title".to_string()),
+            thumbnail: None,
+            duration_s: None,
+        })
+    }
 }
 
 /// Regression for the macOS fd-exhaustion crash observed when launching the
@@ -382,6 +442,8 @@ async fn requeue_pending_thumbnail_fetches_is_concurrency_bounded() {
             title_status: TitleStatus::Ok,
             format_pref: FormatPref::BestHeuristic,
             dest_dir: dest_dir.clone(),
+            kind: PlaceholderKind::Video,
+            display_order: 0,
         };
         db.with_conn(|c| queue::insert(c, item)).unwrap();
     }

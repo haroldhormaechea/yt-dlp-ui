@@ -75,6 +75,19 @@ jobs:
         if: runner.os != 'Linux'
         run: cargo test --workspace
 
+      # On macOS, upload the regenerated _ComponentSmoke render on test
+      # failure so the team can pull the new baseline without macOS access
+      # whenever _ComponentSmoke is intentionally changed (UC 29 added two
+      # AddBar instances; future UCs may extend it again).
+      - name: Upload _ComponentSmoke pixel-diff artifact on failure
+        if: failure() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-smoke-baseline-macos
+          path: crates/app/tests/baselines/_component_smoke.actual.png
+          if-no-files-found: warn
+          retention-days: 7
+
   scripts-bats:
     name: bats (scripts)
     runs-on: ubuntu-latest

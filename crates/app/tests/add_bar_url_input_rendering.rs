@@ -150,7 +150,7 @@ fn main_window_constructs_with_uc29_addbar_textinput_rework() {
 /// only macOS.
 ///
 /// Note: `_ComponentSmoke` is a `Window`-rooted component declared at
-/// `480 × 460 px` (height grew from 380 → 460 with UC 29's two AddBar
+/// `480 × 460 px` (height grew from 380 → 460 with UC 29's two `AddBar`
 /// additions, ~80 px of new content at the top of the `VerticalLayout`).
 /// `icon_snapshot_test.rs` has been updated to render at the new height
 /// — see that file's `HEIGHT` constant.

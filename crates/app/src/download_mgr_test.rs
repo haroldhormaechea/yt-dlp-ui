@@ -2652,3 +2652,352 @@ async fn start_all_promotes_resumable_rows_under_cap() {
     }
     drain_ui(&env.ui_rx).await;
 }
+
+// =====================================================================
+// UC 12 — `remove_all` manager-level tests.
+// =====================================================================
+
+/// UC 12 AC #7 + AC #14 — calling `remove_all` on a queue with rows in
+/// every state mix empties the DB and emits `RowRemoved` for every seeded
+/// id. The "active" branch is exercised by a single in-flight row promoted
+/// via `add_url` (so the supervisor exists and reacts to the cancel-token);
+/// the "terminal" branch is exercised by directly-seeded rows in the four
+/// non-active states (cancelled / done / error / paused) plus a queued row
+/// that never promotes.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn remove_all_empties_mixed_queue() {
+    // Cap = 1 with the slot held by the in-flight `add_url` row, so the
+    // direct-seeded `queued` row stays queued (the runner cannot promote it
+    // without a free permit) and the assertions are deterministic.
+    let env = setup(FakeBehavior::default(), 1);
+
+    // 1. Real in-flight row (the only one whose supervisor is alive).
+    env.manager
+        .add_url("https://example.com/in-flight".to_string(), None)
+        .await
+        .expect("add in_flight");
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let in_flight_id = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url(c, "https://example.com/in-flight"))
+        .unwrap()
+        .unwrap()
+        .id;
+    assert_eq!(
+        row_status(&env.db, in_flight_id),
+        QueueStatus::InFlight,
+        "the holder must be in_flight before remove_all"
+    );
+
+    // 2. Direct-seeded rows covering every other status.
+    let queued_id = seed_row_with_status(
+        &env.db,
+        "https://example.com/queued",
+        QueueStatus::Queued,
+        None,
+        None,
+    );
+    let cancelled_id = seed_row_with_status(
+        &env.db,
+        "https://example.com/cancelled",
+        QueueStatus::Cancelled,
+        Some(40.0),
+        None,
+    );
+    let done_id = seed_row_with_status(
+        &env.db,
+        "https://example.com/done",
+        QueueStatus::Done,
+        Some(100.0),
+        None,
+    );
+    let error_id = seed_row_with_status(
+        &env.db,
+        "https://example.com/error",
+        QueueStatus::Error,
+        Some(70.0),
+        Some("HTTP Error 403"),
+    );
+    let paused_id = seed_row_with_status(
+        &env.db,
+        "https://example.com/paused",
+        QueueStatus::Paused,
+        Some(25.0),
+        None,
+    );
+
+    let seeded_ids: std::collections::HashSet<i64> = [
+        in_flight_id,
+        queued_id,
+        cancelled_id,
+        done_id,
+        error_id,
+        paused_id,
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(
+        env.db.with_conn(crate::db::queue::list_all).unwrap().len(),
+        6,
+        "fixture must seed exactly six rows"
+    );
+
+    // 3. Bulk remove — must succeed and empty the queue.
+    env.manager.remove_all().await.expect("remove_all");
+
+    // 4. AC #7 — every row is deleted from the DB.
+    let after = env.db.with_conn(crate::db::queue::list_all).unwrap();
+    assert!(
+        after.is_empty(),
+        "remove_all must clear every row regardless of starting state (got {after:?})"
+    );
+
+    // 5. AC #14 — `RowRemoved` emitted for every seeded id.
+    let mut removed_ids = std::collections::HashSet::<i64>::new();
+    let mut rx = env.ui_rx.lock().await;
+    while let Ok(evt) = rx.try_recv() {
+        if let UiEvent::RowRemoved(id) = evt {
+            removed_ids.insert(id);
+        }
+    }
+    assert_eq!(
+        removed_ids,
+        seeded_ids,
+        "RowRemoved must be emitted for every seeded id (missing: {:?})",
+        seeded_ids
+            .difference(&removed_ids)
+            .copied()
+            .collect::<Vec<_>>()
+    );
+}
+
+/// UC 12 AC #9 — when `remove_all` runs while a row is parked at the
+/// bot-check oneshot (registered with
+/// `BotCheckCoordinator::report_auth_required`), the supervisor's
+/// `cancel.notified()` arm MUST call `coordinator.withdraw(id)` so no
+/// `oneshot::Sender` leaks. Regression net for the v1 → v2 withdraw-
+/// ordering fix.
+///
+/// The supervisor's terminal state for a cancel-during-AuthRequired path
+/// is `Cancelled` (not `Error`); we additionally pin that the row's
+/// `error_msg` stays `None` after the deletion settles, matching the
+/// existing `cancel_one_during_auth_required_terminates_at_cancelled`
+/// pattern.
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn remove_all_withdraws_pending_bot_check_rows() {
+    let env = setup_full(
+        FakeBehavior {
+            download_outcomes: vec![DownloadOutcome::AuthRequired {
+                stderr_tail: "Use --cookies-from-browser".to_string(),
+            }],
+            ..Default::default()
+        },
+        1,
+        vec![Browser::Chrome],
+        None,
+    );
+
+    env.manager
+        .add_url(
+            "https://www.youtube.com/watch?v=remove-all-bot-check".to_string(),
+            None,
+        )
+        .await
+        .expect("add");
+
+    let id = env
+        .db
+        .with_conn(|c| {
+            crate::db::queue::find_by_url(c, "https://www.youtube.com/watch?v=remove-all-bot-check")
+        })
+        .unwrap()
+        .unwrap()
+        .id;
+
+    // Wait until the supervisor is parked on the bot-check oneshot (the
+    // dialog event proves coordinator.report_auth_required has registered
+    // the row's retry_tx). Mirrors the existing `cancel_one_during_…` test.
+    let mut saw_dialog = false;
+    let mut last_status_for_id: Option<&'static str> = None;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut rx = env.ui_rx.lock().await;
+        while let Ok(evt) = rx.try_recv() {
+            if matches!(evt, UiEvent::ShowBotCheckDialog { .. }) {
+                saw_dialog = true;
+            }
+            if let UiEvent::RowUpserted(ref row) = evt
+                && row.id == id
+            {
+                last_status_for_id = Some(row.status.as_str());
+            }
+        }
+        drop(rx);
+        if saw_dialog {
+            break;
+        }
+    }
+    assert!(saw_dialog, "supervisor must park on the bot-check oneshot");
+
+    // Pre-condition: coordinator has the row registered.
+    let coord = env.manager.bot_check_coordinator();
+    assert_eq!(
+        coord.pending_count().await,
+        1,
+        "coordinator must hold exactly one registered row before remove_all"
+    );
+
+    // Fire remove_all. The supervisor's cancel.notified() arm calls
+    // coordinator.withdraw(id), sets terminal = Cancelled, and exits;
+    // the post-loop block writes status = Cancelled and emits RowUpserted.
+    env.manager.remove_all().await.expect("remove_all");
+
+    // AC #9 (the whole point of this test): the registered oneshot is gone.
+    assert_eq!(
+        coord.pending_count().await,
+        0,
+        "coordinator.withdraw(id) must run for every parked row before its DB delete"
+    );
+
+    // The row was eventually deleted as part of the bulk transaction.
+    let after = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url_by_id_internal(c, id))
+        .unwrap();
+    assert!(after.is_none(), "row must be deleted after remove_all");
+
+    // Drain and inspect the channel. The supervisor's cancel.notified() arm
+    // sets terminal = Cancelled (NOT Error) before exiting; the post-loop
+    // block then writes status = 'cancelled' and emits RowUpserted; only
+    // afterwards does remove_all bulk-delete and emit RowRemoved. Pin both
+    // invariants:
+    //   (a) at least one RowUpserted{status='cancelled'} was emitted for
+    //       the row (the supervisor's terminal write — proves AC #9's
+    //       cancel-not-error terminal posture);
+    //   (b) no RowUpserted{status='error'} was emitted for the row (a
+    //       regression that wrote `error` instead would surface here);
+    //   (c) RowRemoved was emitted.
+    // Together with the `pending_count == 0` assertion above, this is the
+    // full regression net for the v1→v2 withdraw-ordering fix.
+    let _ = last_status_for_id; // captured during the dialog wait, retained for debug
+    let mut saw_cancelled = false;
+    let mut saw_error = false;
+    let mut saw_removed = false;
+    let mut rx = env.ui_rx.lock().await;
+    while let Ok(evt) = rx.try_recv() {
+        match evt {
+            UiEvent::RowUpserted(row) if row.id == id => match row.status.as_str() {
+                "cancelled" => saw_cancelled = true,
+                "error" => saw_error = true,
+                _ => {}
+            },
+            UiEvent::RowRemoved(target) if target == id => {
+                saw_removed = true;
+            }
+            _ => {}
+        }
+    }
+    drop(rx);
+    assert!(
+        saw_removed,
+        "RowRemoved must be emitted for the deleted row"
+    );
+    assert!(
+        saw_cancelled,
+        "the supervisor's cancel.notified() arm must write status = 'cancelled' \
+         before remove_all deletes the row (AC #9 + the v1→v2 withdraw-ordering fix)"
+    );
+    assert!(
+        !saw_error,
+        "a Cancel-during-AuthRequired must NEVER write status = 'error' for the row — \
+         that would leak through TerminalReason::Error and tarnish error_msg too"
+    );
+}
+
+/// UC 12 AC #10 (pragmatic reading) — the bulk-delete transaction prunes
+/// `history` rows referencing `done` queue items first, so the FK cascade
+/// at `delete_by_id` (covered by
+/// `db::queue::queue_tests::delete_by_id_cascades_history_rows`) is honored
+/// when the `DELETE FROM queue_items` runs. Without this, `PRAGMA
+/// foreign_keys = ON` would refuse the bulk delete for any `done` row that
+/// carries a history entry.
+///
+/// The strict "history is append-only" reading of AC #10 is impossible
+/// while the FK is enabled and the transaction has to succeed; the
+/// developer documented this trade-off (the spirit-of-AC is preserved —
+/// completed-download history for a row that no longer exists in the
+/// queue would be orphan rows that point at a missing FK target).
+#[tokio::test]
+async fn remove_all_cascades_history_for_done_rows() {
+    let env = setup(FakeBehavior::default(), 1);
+
+    // Seed a `done` row plus a referencing history entry.
+    let done_id = seed_row_with_status(
+        &env.db,
+        "https://example.com/done-with-history",
+        QueueStatus::Done,
+        Some(100.0),
+        None,
+    );
+    env.db
+        .with_conn(|c| -> crate::db::Result<()> {
+            c.execute(
+                "INSERT INTO history (queue_item_id, file_path, bytes, completed_at)
+                 VALUES (?, '/tmp/done-with-history.mp4', 1024, CURRENT_TIMESTAMP)",
+                [done_id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+    // Sanity — history fixture exists.
+    let history_before: i64 = env
+        .db
+        .with_conn(|c| -> crate::db::Result<i64> {
+            let n = c.query_row(
+                "SELECT COUNT(*) FROM history WHERE queue_item_id = ?",
+                [done_id],
+                |r| r.get::<_, i64>(0),
+            )?;
+            Ok(n)
+        })
+        .unwrap();
+    assert_eq!(
+        history_before, 1,
+        "fixture must seed one history row before remove_all"
+    );
+
+    env.manager.remove_all().await.expect("remove_all");
+
+    // AC #7 — queue row gone.
+    let queue_after = env
+        .db
+        .with_conn(|c| crate::db::queue::find_by_url_by_id_internal(c, done_id))
+        .unwrap();
+    assert!(
+        queue_after.is_none(),
+        "the done row must be deleted by remove_all"
+    );
+
+    // AC #10 (pragmatic) — history row pruned for the done row, matching
+    // `queue::delete_by_id` cascade semantics.
+    let history_after: i64 = env
+        .db
+        .with_conn(|c| -> crate::db::Result<i64> {
+            let n = c.query_row(
+                "SELECT COUNT(*) FROM history WHERE queue_item_id = ?",
+                [done_id],
+                |r| r.get::<_, i64>(0),
+            )?;
+            Ok(n)
+        })
+        .unwrap();
+    assert_eq!(
+        history_after, 0,
+        "history rows for deleted done queue items must be pruned (FK cascade compatibility)"
+    );
+
+    drain_ui(&env.ui_rx).await;
+}

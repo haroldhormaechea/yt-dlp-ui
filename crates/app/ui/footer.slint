@@ -21,9 +21,17 @@ export component Footer inherits Rectangle {
     // UC 14: pre-rendered tooltip text owned by the host (`ui_bridge`) so
     // the segment-omission rules live in one place (Rust unit-tested).
     in property <string> tooltip-text;
+    // UC 12: mid-flight gates for the two batch buttons. The host flips
+    // `cancel-all-busy` synchronously when "Cancel all" fires (and clears
+    // it on completion); `remove-all-busy` is flipped from the confirm
+    // modal's primary-button callback. Either being true disables BOTH
+    // batch buttons per AC #2.
+    in property <bool> cancel-all-busy;
+    in property <bool> remove-all-busy;
 
     callback start-all-clicked();
     callback cancel-all-clicked();
+    callback remove-all-clicked();
 
     background: DesignTokens.surface-2;
     border-color: DesignTokens.border;
@@ -68,8 +76,30 @@ export component Footer inherits Rectangle {
                 text: "Cancel all";
                 variant: "danger";
                 icon: Icons.stop;
-                enabled: (root.queued-count + root.active-count + root.waiting-count) > 0;
+                // UC 12 AC #2: widens the previous (queued+active+waiting>0)
+                // predicate so Cancel-all becomes disabled in lock-step with
+                // Remove-all — both share the "any row → enabled, mid-flight
+                // either → disabled" contract.
+                enabled: (root.queued-count + root.active-count + root.waiting-count
+                            + root.cancelled-count + root.done-count + root.error-count) > 0
+                        && !root.cancel-all-busy
+                        && !root.remove-all-busy;
                 clicked => { root.cancel-all-clicked(); }
+            }
+
+            // UC 12: Remove-all batch button. Shares the same enable
+            // predicate and mid-flight busy gates as Cancel-all (AC #2).
+            // Click opens the confirm modal (host wires `remove-all-clicked`
+            // to pre-render counts/copy and flip `remove-all-confirm-open`).
+            Button {
+                text: "Remove all";
+                variant: "danger";
+                icon: Icons.x;
+                enabled: (root.queued-count + root.active-count + root.waiting-count
+                            + root.cancelled-count + root.done-count + root.error-count) > 0
+                        && !root.cancel-all-busy
+                        && !root.remove-all-busy;
+                clicked => { root.remove-all-clicked(); }
             }
         }
 

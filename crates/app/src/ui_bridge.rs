@@ -41,6 +41,14 @@ fn next_toast_id() -> i32 {
 /// 3 s `Timer`. Works from any tokio task — callers do NOT need to be on
 /// the UI thread first.
 fn push_toast_on_main(weak: Weak<MainWindow>, kind: &'static str, text: &'static str) {
+    push_toast_on_main_owned(weak, kind, text.to_string());
+}
+
+/// UC 12: owned-string sibling of [`push_toast_on_main`] for callers whose
+/// toast text is dynamic (e.g. "Queue cleared (5 items)."). Same semantics
+/// otherwise — invokes onto the slint event loop, caps the visible queue at
+/// 3, auto-dismiss is handled by the Slint-side `Timer`.
+fn push_toast_on_main_owned(weak: Weak<MainWindow>, kind: &'static str, text: String) {
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         let model = w.get_toasts();
@@ -53,11 +61,76 @@ fn push_toast_on_main(weak: Weak<MainWindow>, kind: &'static str, text: &'static
         }
         vec_model.push(ToastEntry {
             id: next_toast_id(),
-            text: SharedString::from(text),
+            text: SharedString::from(text.as_str()),
             kind: SharedString::from(kind),
             visible_now: true,
         });
     });
+}
+
+/// UC 12: pluralization helper for the "N item(s)" copy in the Remove-all
+/// confirm modal and the resulting toast. Mirrors the segment-omission
+/// helpers — pure, host-tested, no Slint coupling.
+#[must_use]
+pub(crate) fn pluralize_items(n: i32) -> &'static str {
+    if n == 1 { "item" } else { "items" }
+}
+
+/// UC 12: builds the two body lines for the Remove-all confirm modal. The
+/// second line is the in-flight call-out and is empty when `K == 0`
+/// (AC #5's omission rule). Both strings are pre-rendered on the host so
+/// pluralization lives in one place that is unit-testable, mirroring
+/// UC 14's `compute_start_all_tooltip`.
+#[must_use]
+pub(crate) fn format_remove_all_body(total: i32, in_flight: i32) -> (String, String) {
+    let line_1 = format!(
+        "This will remove {total} {} from the queue.",
+        pluralize_items(total)
+    );
+    let line_2 = if in_flight == 0 {
+        String::new()
+    } else {
+        format!(
+            "{in_flight} {} still in flight and will be cancelled first. This cannot be undone.",
+            if in_flight == 1 { "is" } else { "are" }
+        )
+    };
+    (line_1, line_2)
+}
+
+/// UC 12: builds the danger-button label for the Remove-all confirm modal.
+#[must_use]
+pub(crate) fn format_remove_all_primary_label(total: i32) -> String {
+    format!("Remove {total}")
+}
+
+/// UC 12: builds the post-completion info toast string.
+#[must_use]
+pub(crate) fn format_remove_all_toast(total: i32) -> String {
+    format!("Queue cleared ({total} {}).", pluralize_items(total))
+}
+
+/// UC 12: count rows that count as "in flight" for the Remove-all
+/// confirm modal. Mirrors `recompute_counts`' walk so the in-flight call-out
+/// stays consistent with the footer mono strip. K = rows whose status is
+/// `in_flight` or `cancelling`, OR rows with `waiting_on_user = true`
+/// (those are persisted as `in_flight` already but the bot-check pipeline
+/// surfaces them as a separate transient flag — we count both for the
+/// "will be cancelled first" copy).
+fn compute_remove_all_in_flight_count(window: &MainWindow) -> i32 {
+    let model = window.get_queue();
+    let mut count = 0i32;
+    for i in 0..model.row_count() {
+        if let Some(row) = model.row_data(i) {
+            // Rows that are `in_flight`/`cancelling` get counted once;
+            // rows that have `waiting_on_user = true` are persisted as
+            // `in_flight` already so the membership check is exclusive.
+            if matches!(row.status.as_str(), "in_flight" | "cancelling") {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 /// Reads events from the manager and pushes them onto the Slint event loop.
@@ -475,10 +548,21 @@ pub fn wire_callbacks(
         // counts requires a hop back onto the slint event loop (Slint
         // properties are UI-thread only), so we round-trip via a tokio
         // oneshot to keep the read on the right thread.
+        //
+        // UC 12: also flip `cancel-all-busy` synchronously so the footer's
+        // Remove-all button disables in lock-step (AC #2's "either op
+        // mid-flight disables both" contract). Cleared on completion via
+        // `slint::invoke_from_event_loop`.
         let manager = manager.clone();
         let rt = rt.clone();
         let weak = window.as_weak();
         window.on_cancel_all(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if w.get_cancel_all_busy() || w.get_remove_all_busy() {
+                tracing::warn!("cancel_all clicked while a batch op is busy; ignoring");
+                return;
+            }
+            w.set_cancel_all_busy(true);
             let manager = manager.clone();
             let weak = weak.clone();
             rt.spawn(async move {
@@ -496,6 +580,76 @@ pub fn wire_callbacks(
                 if had_work {
                     push_toast_on_main(weak.clone(), "info", "Queue cancelled.");
                 }
+                let weak_for_done = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_for_done.upgrade() {
+                        w.set_cancel_all_busy(false);
+                    }
+                });
+            });
+        });
+    }
+
+    {
+        // UC 12: Remove-all click on the footer — pre-render counts, body
+        // lines, and the danger-button label on the host, then flip
+        // `remove-all-confirm-open = true`. All synchronous on the UI
+        // thread because every read/write is a Slint property accessor.
+        let weak = window.as_weak();
+        window.on_remove_all_clicked(move || {
+            let Some(w) = weak.upgrade() else { return };
+            // AC #11 contract — if the bot-check modal is open, UC 10's
+            // backdrop should have eaten the click already; this is
+            // defense in depth.
+            if w.get_bot_check_open() {
+                tracing::warn!("remove_all_clicked fired while bot-check open; ignoring");
+                return;
+            }
+            let total = i32::try_from(w.get_queue().row_count()).unwrap_or(i32::MAX);
+            let in_flight = compute_remove_all_in_flight_count(&w);
+            let (line_1, line_2) = format_remove_all_body(total, in_flight);
+            let primary = format_remove_all_primary_label(total);
+            w.set_remove_all_total_count(total);
+            w.set_remove_all_in_flight_count(in_flight);
+            w.set_remove_all_body_line_1(SharedString::from(line_1));
+            w.set_remove_all_body_line_2(SharedString::from(line_2));
+            w.set_remove_all_primary_label(SharedString::from(primary));
+            w.set_remove_all_confirm_open(true);
+        });
+    }
+
+    {
+        // UC 12: Remove-all confirmed — flip `remove-all-busy` synchronously
+        // (AC #2 lock-step with Cancel-all), spawn `manager.remove_all()`,
+        // then on completion clear the busy flag and emit the toast. The
+        // total used in the toast string is captured BEFORE the async
+        // call because the Slint queue model is empty by the time the
+        // callback completes.
+        let manager = manager.clone();
+        let rt = rt.clone();
+        let weak = window.as_weak();
+        window.on_remove_all_confirmed(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if w.get_remove_all_busy() || w.get_cancel_all_busy() {
+                tracing::warn!("remove_all_confirmed while busy; ignoring");
+                return;
+            }
+            w.set_remove_all_busy(true);
+            let total = w.get_remove_all_total_count();
+            let manager = manager.clone();
+            let weak = weak.clone();
+            rt.spawn(async move {
+                if let Err(err) = manager.remove_all().await {
+                    tracing::warn!(?err, "remove_all failed");
+                }
+                let toast_text = format_remove_all_toast(total);
+                push_toast_on_main_owned(weak.clone(), "info", toast_text);
+                let weak_for_done = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_for_done.upgrade() {
+                        w.set_remove_all_busy(false);
+                    }
+                });
             });
         });
     }

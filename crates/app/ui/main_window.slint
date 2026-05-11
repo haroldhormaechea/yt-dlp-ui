@@ -19,6 +19,7 @@ import { EmptyState } from "empty_state.slint";
 import { SettingsPanel } from "settings_panel.slint";
 import { BotCheckModal } from "bot_check_modal.slint";
 import { AboutModal, AboutEntry } from "about_modal.slint";
+import { RemoveAllConfirmModal } from "remove_all_confirm_modal.slint";
 export { DesignTokens, QueueRow, _ComponentSmoke, AboutEntry }
 
 // UC 11: ToastEntry — one row per toast in the in-memory model the host
@@ -97,6 +98,20 @@ export component MainWindow inherits Window {
     in-out property <bool> start-all-busy: false;
     in-out property <string> start-all-tooltip: "";
 
+    // UC 12: Remove-all confirmation modal state. The host pre-renders the
+    // two body lines and the danger-button label before flipping `open` so
+    // pluralization lives in one place that is unit-testable. AC #2's
+    // "either batch op mid-flight" contract requires a `cancel-all-busy`
+    // gate parallel to `start-all-busy` (UC 14 already shipped that one).
+    in-out property <bool> remove-all-confirm-open: false;
+    in-out property <bool> remove-all-busy: false;
+    in-out property <bool> cancel-all-busy: false;
+    in-out property <int> remove-all-total-count: 0;
+    in-out property <int> remove-all-in-flight-count: 0;
+    in-out property <string> remove-all-body-line-1: "";
+    in-out property <string> remove-all-body-line-2: "";
+    in-out property <string> remove-all-primary-label: "";
+
     // UC 19: second arg is the AddBar's per-URL "Audio only" flag.
     callback add-urls(string, bool);
     // UC 14: renamed from `start-all-queued` — the action now also resumes
@@ -116,6 +131,12 @@ export component MainWindow inherits Window {
     callback open-vendor-privacy-policy();
     callback bot-check-pick(string, bool);
     callback bot-check-cancel();
+    // UC 12: Remove-all wiring. `remove-all-clicked` fires from the Footer
+    // and is wired by the host to pre-render counts/body/label and flip
+    // `remove-all-confirm-open = true`. `remove-all-confirmed` fires from
+    // the modal's primary button and is wired to `manager.remove_all()`.
+    callback remove-all-clicked();
+    callback remove-all-confirmed();
     callback toggle-theme();
     // UC 18: opens the ffmpeg source URL in the system default browser.
     callback open-ffmpeg-source();
@@ -131,6 +152,13 @@ export component MainWindow inherits Window {
             // ESC routing — modal takes precedence over the settings panel
             // because the bot-check is a "user must act" overlay; if it is
             // open it is layered above the settings panel anyway.
+            //
+            // UC 12 AC #4: the Remove-all confirm modal sits ABOVE the
+            // bot-check modal in the z-order and so closes first on ESC.
+            if (event.text == Key.Escape && root.remove-all-confirm-open) {
+                root.remove-all-confirm-open = false;
+                return accept;
+            }
             if (event.text == Key.Escape && root.bot-check-open) {
                 root.bot-check-open = false;
                 root.bot-check-cancel();
@@ -334,8 +362,12 @@ export component MainWindow inherits Window {
             error-count: root.error-count;
             start-all-busy: root.start-all-busy;
             tooltip-text: root.start-all-tooltip;
+            // UC 12: mid-flight gates for the two batch buttons.
+            cancel-all-busy: root.cancel-all-busy;
+            remove-all-busy: root.remove-all-busy;
             start-all-clicked => { root.start-all(); }
             cancel-all-clicked => { root.cancel-all(); }
+            remove-all-clicked => { root.remove-all-clicked(); }
         }
 
         // UC 11: Ad-slot region — 64-px-tall placeholder pinned below the
@@ -424,14 +456,17 @@ export component MainWindow inherits Window {
         }
     }
 
-        // Z-order convention (UC 11, extended by UC 18):
+        // Z-order convention (UC 11, extended by UC 18 and UC 12):
         //   1. VerticalLayout (with ad-slot row)
         //   2. Toasts overlay
         //   3. SettingsPanel (UC 09)
         //   4. AboutModal (UC 18)        — sits above Settings so launching
         //                                   from the Settings "About" row
         //                                   does not get obscured.
-        //   5. BotCheckModal (UC 10)     — top-most; "user must act" overlay.
+        //   5. BotCheckModal (UC 10)     — "user must act" overlay.
+        //   6. RemoveAllConfirmModal     — UC 12; top-most. Stacks above the
+        //                                  bot-check modal so its ESC handler
+        //                                  fires first (AC #4).
         // Toast-on-modal is explicitly out of scope.
         for entry[i] in root.toasts : Toast {
             text: entry.text;
@@ -524,6 +559,33 @@ export component MainWindow inherits Window {
             cancel => {
                 root.bot-check-open = false;
                 root.bot-check-cancel();
+            }
+        }
+
+        // UC 12: Remove-all confirmation modal. Mounted last so it stacks
+        // above BotCheckModal — its ESC handler (in the top-level
+        // FocusScope above) is checked first, and a click anywhere on its
+        // backdrop is captured before the bot-check modal sees it. AC #11
+        // remains correct because the bot-check modal's own backdrop
+        // blocks footer clicks before the Remove-all button can fire.
+        RemoveAllConfirmModal {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            open: root.remove-all-confirm-open;
+            total-count: root.remove-all-total-count;
+            in-flight-count: root.remove-all-in-flight-count;
+            body-line-1: root.remove-all-body-line-1;
+            body-line-2: root.remove-all-body-line-2;
+            primary-button-label: root.remove-all-primary-label;
+
+            confirm => {
+                root.remove-all-confirm-open = false;
+                root.remove-all-confirmed();
+            }
+            cancel => {
+                root.remove-all-confirm-open = false;
             }
         }
     }

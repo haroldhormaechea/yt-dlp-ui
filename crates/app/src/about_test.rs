@@ -27,7 +27,7 @@ fn app_version_matches_cargo_pin() {
 /// AC#3-7, AC#13 — entry name set. The bundled-software scope per UC 18 is
 /// `yt-dlp-ui`, `yt-dlp`, `deno`, `Inter`, `JetBrains Mono`, plus the
 /// combined `ffmpeg + ffprobe` entry (UC 28 — single About row covering both
-/// binaries since they ship under the same FFmpeg distribution / LGPL-2.1+
+/// binaries since they ship under the same `FFmpeg` distribution / LGPL-2.1+
 /// license / source notice).
 /// Any drift here (added entry, removed entry, renamed entry) is intentional
 /// and should land alongside a test update — the assertion is on the SET
@@ -86,7 +86,7 @@ fn every_entry_carries_non_trivial_license_text() {
 /// entry must carry a non-empty `source_notice` whose text references
 /// `ffmpeg.org` so users can locate the upstream source. Every other entry
 /// carries `source_notice: None` (no LGPL obligation). UC 28 folds ffprobe
-/// into the same About row as ffmpeg — they ship from the same FFmpeg
+/// into the same About row as ffmpeg — they ship from the same `FFmpeg`
 /// distribution, so a single LGPL notice satisfies both.
 #[test]
 fn ffmpeg_entry_has_source_notice_pointing_at_ffmpeg_org() {
@@ -116,7 +116,7 @@ fn ffmpeg_entry_has_source_notice_pointing_at_ffmpeg_org() {
 }
 
 /// AC#6 — `ffmpeg_display_version()` returns a non-empty, user-facing
-/// string. On non-macOS targets, the BtbN/FFmpeg-Builds release tag is
+/// string. On non-macOS targets, the `BtbN/FFmpeg-Builds` release tag is
 /// stripped of its leading `n` for display (e.g. `n7.1.4` → `7.1.4`); on
 /// macOS, the from-source tarball version (`FFMPEG_VERSION_SOURCE`) is
 /// returned verbatim. Both polarities are covered here — the active branch

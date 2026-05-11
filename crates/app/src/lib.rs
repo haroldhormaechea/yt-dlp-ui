@@ -58,6 +58,7 @@ slint::include_modules!();
 /// # Errors
 ///
 /// Any [`AppError`] variant — see the type's docs.
+#[allow(clippy::too_many_lines)] // startup orchestration; splitting adds noise
 pub fn run() -> Result<(), AppError> {
     // 1. App-data dir.
     let app_data = paths::app_data_dir()?;

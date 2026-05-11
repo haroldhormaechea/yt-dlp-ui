@@ -30,13 +30,6 @@ enum DownloadOutcome {
     AuthRequired { stderr_tail: String },
 }
 
-/// Per-call outcome for `expand_playlist`. The default behavior is to return
-/// `playlist_entries`. UC 05 needs the explicit `AuthRequired` branch.
-#[derive(Clone)]
-enum ExpandOutcome {
-    AuthRequired { stderr_tail: String },
-}
-
 /// UC 27 per-call enumeration outcome served by the fake bridge's
 /// `enumerate_playlist_cancellable`. FIFO; default falls back to
 /// `playlist_entries` (matching `expand_playlist`'s shape).
@@ -53,8 +46,6 @@ enum EnumerationFakeOutcome {
 /// `VideoMetadata`.
 #[derive(Clone)]
 enum MetadataFakeOutcome {
-    Ok(VideoMetadata),
-    AuthRequired { stderr_tail: String },
     Error(&'static str),
 }
 
@@ -76,9 +67,6 @@ struct FakeBehavior {
     playlist_entries: Vec<PlaylistEntry>,
     /// When set, `expand_playlist` returns this error instead of `playlist_entries`.
     expand_error: Option<&'static str>,
-    /// Per-call expand outcomes (FIFO). Drained on each call; falls back to
-    /// `expand_error` then `playlist_entries` when empty.
-    expand_outcomes: Vec<ExpandOutcome>,
     /// Title returned by `fetch_title` (default "Real Title").
     title: Option<String>,
     /// When set, `fetch_title` returns this error.
@@ -184,15 +172,7 @@ impl BridgeOps for FakeBridge {
     ) -> impl std::future::Future<Output = yt_dlp_bridge::Result<Vec<PlaylistEntry>>> + Send {
         let behavior = self.behavior.clone();
         async move {
-            let mut b = behavior.lock().await;
-            if !b.expand_outcomes.is_empty() {
-                let outcome = b.expand_outcomes.remove(0);
-                return match outcome {
-                    ExpandOutcome::AuthRequired { stderr_tail } => {
-                        Err(BridgeError::AuthRequired { stderr_tail })
-                    }
-                };
-            }
+            let b = behavior.lock().await;
             if let Some(err) = b.expand_error {
                 return Err(BridgeError::ExitedWithError {
                     code: Some(1),
@@ -387,7 +367,7 @@ impl BridgeOps for FakeBridge {
                     Ok(EnumerationOutcome::SingleVideo)
                 }
                 Some(EnumerationFakeOutcome::Playlist(entries)) => {
-                    Ok(EnumerationOutcome::Playlist(entries))
+                    Ok(EnumerationOutcome::Playlist(Box::new(entries)))
                 }
                 Some(EnumerationFakeOutcome::AuthRequired { stderr_tail }) => {
                     Err(BridgeError::AuthRequired { stderr_tail })
@@ -428,10 +408,6 @@ impl BridgeOps for FakeBridge {
                 }
             }
             match outcome {
-                Some(MetadataFakeOutcome::Ok(m)) => Ok(m),
-                Some(MetadataFakeOutcome::AuthRequired { stderr_tail }) => {
-                    Err(BridgeError::AuthRequired { stderr_tail })
-                }
                 Some(MetadataFakeOutcome::Error(msg)) => Err(BridgeError::ExitedWithError {
                     code: Some(1),
                     stderr_tail: msg.to_string(),
@@ -3681,10 +3657,11 @@ async fn start_one_on_placeholder_latches_start_requested_and_emits_row_upserted
     let mut saw_latched_upsert = false;
     let mut rx = env.ui_rx.lock().await;
     while let Ok(evt) = rx.try_recv() {
-        if let UiEvent::RowUpserted(row) = evt {
-            if row.id == id && row.start_requested {
-                saw_latched_upsert = true;
-            }
+        if let UiEvent::RowUpserted(row) = evt
+            && row.id == id
+            && row.start_requested
+        {
+            saw_latched_upsert = true;
         }
     }
     assert!(

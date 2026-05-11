@@ -626,7 +626,7 @@ pub fn replace_placeholder_with_children(
         0
     } else {
         let n: i64 = i64::try_from(children.len()).unwrap_or(i64::MAX);
-        let denom = n.checked_add(1).unwrap_or(i64::MAX);
+        let denom = n.saturating_add(1);
         let s = 1_048_576i64 / denom;
         if s == 0 { 1 } else { s }
     };

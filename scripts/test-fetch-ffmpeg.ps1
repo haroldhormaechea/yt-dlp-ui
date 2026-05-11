@@ -7,6 +7,19 @@
 # the macOS hard-fail, the closed-set asset guard, and the missing-env
 # error paths.
 #
+# UC 28 note: ffprobe is staged from the same BtbN archive as ffmpeg by
+# `fetch-ffmpeg.ps1` (extra candidate-path loop entries + a parallel copy
+# step). The happy-path win64 outcome — `${OutputDir}/ffprobe` present
+# alongside `${OutputDir}/ffmpeg`, canonical no-extension name on every OS
+# — is exercised by:
+#   - `scripts/test-fetch-ffmpeg.bats` win64 case (Test-Path equivalent),
+#   - the `dist build --artifacts=local` CI smoke that builds a real
+#     installer and runs `installer/tests/test-nsis-extract.ps1` against it
+#     (which now asserts both `ffmpeg` AND `ffprobe` are present).
+# Adding a duplicate happy-path here would require restaging the full
+# stub-HTTP-server fixture chain the bats file relies on; the dist smoke
+# is the agreed-upon Windows coverage path.
+#
 # Usage: pwsh scripts/test-fetch-ffmpeg.ps1
 
 Set-StrictMode -Version Latest

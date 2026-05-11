@@ -163,6 +163,14 @@ DEST="${OUTPUT_DIR}/ffmpeg"
 cp -f "${SRC_DIR}/ffmpeg" "${DEST}"
 chmod +x "${DEST}"
 
+# UC 28: copy ffprobe alongside ffmpeg. `make` already produced ffprobe via
+# the same configure invocation (no extra build step needed); this is a
+# staging-only change. Co-locating ffprobe with ffmpeg lets yt-dlp discover
+# both via `--ffmpeg-location <dir>`.
+FFPROBE_DEST="${OUTPUT_DIR}/ffprobe"
+cp -f "${SRC_DIR}/ffprobe" "${FFPROBE_DEST}"
+chmod +x "${FFPROBE_DEST}"
+
 # Copy LGPL license text.
 LICENSE_DEST="${OUTPUT_DIR}/ffmpeg-LICENSE.txt"
 if [[ -f "${SRC_DIR}/COPYING.LGPLv2.1" ]]; then
@@ -193,5 +201,21 @@ if [[ -n "${CONFIG_LINE}" ]] && echo "${CONFIG_LINE}" | grep -E -- "${FORBIDDEN_
     exit 75
 fi
 
+# UC 28: lint ffprobe's configure line too. The pair are built from the
+# same `./configure` invocation, so they should share a configuration
+# banner — but a future build-system drift (e.g., separate configure
+# paths) would silently allow a GPL-tainted ffprobe alongside an LGPL-
+# only ffmpeg. Defense-in-depth.
+PROBE_CONFIG_LINE="$("${FFPROBE_DEST}" -version 2>&1 | grep -E '^\s*configuration:' || true)"
+if [[ -z "${PROBE_CONFIG_LINE}" ]]; then
+    echo "warning: ffprobe -version did not echo a configuration line; lint inconclusive" >&2
+fi
+if [[ -n "${PROBE_CONFIG_LINE}" ]] && echo "${PROBE_CONFIG_LINE}" | grep -E -- "${FORBIDDEN_REGEX}" >/dev/null; then
+    echo "error: forbidden GPL/nonfree flag detected in built ffprobe" >&2
+    echo "  config: ${PROBE_CONFIG_LINE}" >&2
+    exit 75
+fi
+
 echo "placed ${DEST} (ffmpeg ${FFMPEG_VERSION_SOURCE}, LGPL-only)"
+echo "placed ${FFPROBE_DEST} (ffprobe ${FFMPEG_VERSION_SOURCE}, LGPL-only)"
 echo "config: ${CONFIG_LINE}"

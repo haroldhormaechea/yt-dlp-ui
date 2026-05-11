@@ -48,11 +48,17 @@ if [[ ! -d "${APP}" ]]; then
     exit 1
 fi
 
+# UC 17 closed the ffmpeg-coverage gap: today's universal-binary list omits
+# Resources/ffmpeg. UC 28 extends the inventory with Resources/ffprobe so a
+# partial-staging regression on either binary trips the test instead of
+# silently shipping a broken bundle.
 for path in \
     "${APP}/Contents/MacOS/yt-dlp-ui" \
     "${APP}/Contents/MacOS/ad-window" \
     "${APP}/Contents/Resources/yt-dlp" \
     "${APP}/Contents/Resources/deno" \
+    "${APP}/Contents/Resources/ffmpeg" \
+    "${APP}/Contents/Resources/ffprobe" \
     "${APP}/Contents/Info.plist"
 do
     if [[ -f "${path}" ]]; then
@@ -63,12 +69,18 @@ do
     fi
 done
 
-# Exec bits + universal-binary check on the four binaries.
+# Exec bits + universal-binary check on the bundled binaries. UC 17 + UC 28
+# expand the universal-Mach-O coverage from {yt-dlp, deno, ad-window, app}
+# to also include ffmpeg + ffprobe — both are lipo-merged by
+# scripts/build-ffmpeg-macos.sh and installer/build-macos-dmg.sh, so a
+# regression that stages a single-arch ffmpeg or ffprobe trips here.
 for path in \
     "${APP}/Contents/MacOS/yt-dlp-ui" \
     "${APP}/Contents/MacOS/ad-window" \
     "${APP}/Contents/Resources/yt-dlp" \
-    "${APP}/Contents/Resources/deno"
+    "${APP}/Contents/Resources/deno" \
+    "${APP}/Contents/Resources/ffmpeg" \
+    "${APP}/Contents/Resources/ffprobe"
 do
     if [[ ! -x "${path}" ]]; then
         echo "FAIL: ${path##${MOUNT_POINT}/} not executable"

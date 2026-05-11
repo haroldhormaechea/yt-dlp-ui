@@ -141,17 +141,38 @@ try {
         (Join-Path $topDir.FullName 'bin/ffmpeg.exe'),
         (Join-Path $topDir.FullName 'bin/ffmpeg'),
         (Join-Path $topDir.FullName 'ffmpeg.exe'),
-        (Join-Path $topDir.FullName 'ffmpeg')
+        (Join-Path $topDir.FullName 'ffmpeg'),
+        (Join-Path $topDir.FullName 'bin/ffprobe.exe'),
+        (Join-Path $topDir.FullName 'bin/ffprobe'),
+        (Join-Path $topDir.FullName 'ffprobe.exe'),
+        (Join-Path $topDir.FullName 'ffprobe')
     )
-    $ffmpegBin = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    $ffmpegBin = $candidates | Where-Object {
+        ($_ -match 'ffmpeg(\.exe)?$') -and (Test-Path -LiteralPath $_ -PathType Leaf)
+    } | Select-Object -First 1
     if (-not $ffmpegBin) {
         [Console]::Error.WriteLine('ffmpeg binary not found inside extracted archive')
+        exit 72
+    }
+
+    # UC 28: locate ffprobe alongside ffmpeg in the same BtbN archive.
+    # Co-locating ffprobe with ffmpeg lets yt-dlp discover both via the
+    # single `--ffmpeg-location <dir>` flag.
+    $ffprobeBin = $candidates | Where-Object {
+        ($_ -match 'ffprobe(\.exe)?$') -and (Test-Path -LiteralPath $_ -PathType Leaf)
+    } | Select-Object -First 1
+    if (-not $ffprobeBin) {
+        [Console]::Error.WriteLine('ffprobe binary not found inside extracted archive')
         exit 72
     }
 
     # Canonical no-extension destination on every OS (mirrors fetch-yt-dlp.ps1).
     $dest = Join-Path $OutputDir 'ffmpeg'
     Copy-Item -Force -LiteralPath $ffmpegBin -Destination $dest
+
+    # UC 28: ffprobe sits next to ffmpeg, canonical no-extension on every OS.
+    $ffprobeDest = Join-Path $OutputDir 'ffprobe'
+    Copy-Item -Force -LiteralPath $ffprobeBin -Destination $ffprobeDest
 
     $licenseDest = Join-Path $OutputDir 'ffmpeg-LICENSE.txt'
     $licenseSrc = Get-ChildItem -LiteralPath $topDir.FullName -Recurse -File `
@@ -175,6 +196,7 @@ until the next ffmpeg pin bump rotates a real LICENSE file in.
     }
 
     Write-Host "placed $dest (ffmpeg $($pins.FFMPEG_RELEASE_TAG), $TargetTriple)"
+    Write-Host "placed $ffprobeDest (ffprobe $($pins.FFMPEG_RELEASE_TAG), $TargetTriple)"
 }
 finally {
     Remove-Item -Recurse -Force -LiteralPath $workDir.FullName -ErrorAction SilentlyContinue

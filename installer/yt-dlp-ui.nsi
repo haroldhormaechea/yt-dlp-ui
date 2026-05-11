@@ -93,6 +93,12 @@ Section "MainSection" SEC01
     ; UC 17 — bundled LGPL-only ffmpeg + LICENSE text. Same canonical-
     ; name posture as yt-dlp / deno.
     File "${SOURCE_DIR}\ffmpeg"
+    ; UC 28 — ffprobe co-located with ffmpeg so yt-dlp's
+    ; `--ffmpeg-location <dir>` discovers both. Canonical no-extension
+    ; convention (UC 06 / UC 17 alignment); paths.rs Windows branch
+    ; probes `<bin>.exe` first then `<bin>` so a literal `ffprobe.exe`
+    ; from AC #2 is not required at the filesystem level.
+    File "${SOURCE_DIR}\ffprobe"
     File "${SOURCE_DIR}\ffmpeg-LICENSE.txt"
     File "${SOURCE_DIR}\yt-dlp-LICENSE.txt"
     File "${SOURCE_DIR}\LICENSE"
@@ -130,6 +136,7 @@ Section "Uninstall"
     Delete "$INSTDIR\yt-dlp"
     Delete "$INSTDIR\deno"
     Delete "$INSTDIR\ffmpeg"
+    Delete "$INSTDIR\ffprobe"
     Delete "$INSTDIR\ffmpeg-LICENSE.txt"
     Delete "$INSTDIR\yt-dlp-LICENSE.txt"
     Delete "$INSTDIR\LICENSE"

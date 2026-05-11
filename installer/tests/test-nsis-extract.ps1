@@ -67,6 +67,13 @@ $expected = @(
     'ad-window.exe',
     'yt-dlp',
     'deno',
+    # UC 17 closed the ffmpeg-coverage gap on the NSIS installer; UC 28
+    # extends the inventory with ffprobe so a partial-staging regression on
+    # either binary trips this test instead of silently shipping a broken
+    # installer. Canonical no-extension names on every OS (matches paths.rs
+    # Windows fallback to bare 'ffmpeg' / 'ffprobe').
+    'ffmpeg',
+    'ffprobe',
     'yt-dlp-LICENSE.txt',
     'LICENSE',
     'MicrosoftEdgeWebview2Setup.exe'
@@ -83,6 +90,11 @@ foreach ($name in $expected) {
 }
 
 # Sanity size checks (yt-dlp > 5 MB, deno > 30 MB; loose lower bounds).
+# UC 17 / UC 28: BtbN LGPL ffmpeg ships ~25-35 MB on Windows; ffprobe is
+# substantially smaller (typically 2-5 MB but historical builds have hit
+# ~1.5 MB, hence the conservative 1 MB floor per challenger N1). Floors
+# are deliberately loose — they catch "zero-byte stub" / "wrong file
+# extracted" regressions, not version-to-version size drift.
 function Test-MinSize {
     param([string] $Name, [int64] $Min)
     if ($sizes.ContainsKey($Name) -and $sizes[$Name] -ge $Min) {
@@ -93,8 +105,10 @@ function Test-MinSize {
         $script:failures++
     }
 }
-Test-MinSize 'yt-dlp' 5000000
-Test-MinSize 'deno'   30000000
+Test-MinSize 'yt-dlp'  5000000
+Test-MinSize 'deno'    30000000
+Test-MinSize 'ffmpeg'  10000000
+Test-MinSize 'ffprobe' 1000000
 
 if ($failures -gt 0) {
     Write-Host ""

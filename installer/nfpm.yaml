@@ -46,6 +46,15 @@ contents:
     dst: /opt/yt-dlp-ui/ffmpeg
     file_info:
       mode: 0755
+  # UC 28: ffprobe co-located with ffmpeg so yt-dlp's
+  # `--ffmpeg-location <dir>` discovers both binaries from the same
+  # directory. Shares the LGPL-2.1+ license already shipped at
+  # /usr/share/doc/yt-dlp-ui/ffmpeg-LICENSE.txt — single FFmpeg
+  # distribution, no separate license file.
+  - src: runtime-deps/ffprobe
+    dst: /opt/yt-dlp-ui/ffprobe
+    file_info:
+      mode: 0755
   - src: runtime-deps/ffmpeg-LICENSE.txt
     dst: /usr/share/doc/yt-dlp-ui/ffmpeg-LICENSE.txt
   - src: installer/launcher.sh

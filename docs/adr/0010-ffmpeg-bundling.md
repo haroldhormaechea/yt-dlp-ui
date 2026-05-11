@@ -179,3 +179,75 @@ ADR `0007-design-system.md`. ADRs are append-only with a monotonically
 increasing slot number; reusing 0007 would produce a confusing diff
 history. This ADR claims slot 0010 — the next free integer at the time
 of writing — and the use-case file's reference is updated accordingly.
+
+## Revision: UC 28 (2026-05-11)
+
+UC 17 closed with an explicit deferral on ffprobe: *"ffprobe is not
+bundled by default. If during analysis or QA yt-dlp errors on a missing
+ffprobe, the developer adds ffprobe in the same patch using the
+identical fetch / verify / path-resolver protocol as ffmpeg."* UC 28
+fires that follow-up.
+
+**What changed:**
+
+- `scripts/fetch-ffmpeg.{sh,ps1}` now extract `ffprobe` from the same
+  BtbN archive that already produces `ffmpeg`. No second download.
+- `scripts/build-ffmpeg-macos.sh` copies `ffprobe` alongside `ffmpeg`
+  to the output directory. No second `./configure` or `make` — the
+  same invocation that produces ffmpeg produces ffprobe. The
+  configure-flag lint at the tail of the script is extended to also
+  re-invoke ffprobe with `-version` and apply the same forbidden-flag
+  regex, defense-in-depth in case a future build-system drift gives
+  the two binaries divergent configure lines.
+- `crates/app/src/paths.rs` exposes `bundled_ffprobe_path() ->
+  Result<PathBuf, PathError>` mirroring `bundled_ffmpeg_path()` shape
+  for shape: same per-OS resolution, same dev-mode `$PATH` fallback,
+  same `Result` discipline at the resolver. The macOS
+  `strip_macos_quarantine_if_needed` candidate list is extended with
+  `ffprobe`.
+- `crates/app/src/lib.rs::run` resolves ffprobe immediately after
+  ffmpeg (info-on-success / warn-on-failure log lines) and checks a
+  co-location invariant when both paths resolve: if their parents
+  differ, log `ERROR` and continue. The invariant is what makes
+  yt-dlp's existing `--ffmpeg-location <parent_dir>` discover both
+  binaries at runtime; an invariant violation surfaces a packaging
+  bug before the user-visible "ffprobe not found" runtime error fires.
+- No bridge API change. `DownloadRequest` does not get a new
+  `ffprobe_path` field — the existing parent-directory
+  `--ffmpeg-location` plumbing across all five bridge call sites is
+  already correct, and a separate flag would invite path-divergence
+  bugs.
+- Installers (`installer/build-macos-dmg.sh`, `installer/nfpm.yaml`,
+  `installer/yt-dlp-ui.nsi`) all stage `ffprobe` at the same per-OS
+  path pattern as ffmpeg. NSIS uses the canonical no-extension
+  convention (`File "${SOURCE_DIR}\ffprobe"`) consistent with ffmpeg
+  / yt-dlp / deno; paths.rs's Windows branch dual-probes `.exe` first
+  then the canonical name.
+- `.github/workflows/package-dmg.yml`'s per-arch `actions/cache`
+  entries grow from a single-string `path:` to a multi-line list
+  covering `ffmpeg`, `ffprobe`, and `ffmpeg-LICENSE.txt`, so a cache
+  hit round-trips the whole bundle. The belt-and-suspenders license-
+  synth block is annotated with a UC 28 follow-up TODO and removed
+  after one confirmed release where the multi-path cache works.
+- `crates/app/src/about.rs` renames the ffmpeg entry to
+  `"ffmpeg + ffprobe"`. Same LGPL-2.1+ text, same source notice, same
+  version — single FFmpeg distribution, no separate entry.
+- THREATS.md § T1 and § T13 are updated to reflect ffprobe in the
+  bundled-binary inventory and the shared trust posture.
+
+**What deliberately did NOT change:**
+
+- The performance-budget ceiling (PROJECT_BRIEF.md § Performance
+  budgets) remains 100 MB. Adding ffprobe is ~25–35 MB; AC #14 makes
+  QA record the measured impact. The revert clause is unchanged.
+- Bridge API. No `ffprobe_path` field on `DownloadRequest`. yt-dlp's
+  directory-form `--ffmpeg-location` is the contract.
+- macOS code signing. UC 26 territory; if UC 26 lands before this UC
+  reaches `release`, the `codesign --deep` step picks up the new
+  Mach-O without further work here.
+
+**Why this is a Revision section, not a new ADR:** the policy
+(LGPL-only, BtbN for Linux + Windows, source build on macOS) is
+unchanged. Only the inventory of binaries produced by that policy
+grew. ADR-spawning a "0011 — ffprobe bundling" would tell the wrong
+story; this is a parameter change, not a new architectural decision.

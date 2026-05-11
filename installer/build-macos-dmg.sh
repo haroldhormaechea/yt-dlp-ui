@@ -84,6 +84,15 @@ lipo -create -output "${RES_DIR}/ffmpeg" \
     "${AARCH64_DEPS_DIR}/ffmpeg" \
     "${X86_64_DEPS_DIR}/ffmpeg"
 
+# UC 28: lipo-merge ffprobe symmetrically. Both per-arch ffprobe binaries
+# come from the same configure invocation as their per-arch ffmpeg
+# (build-ffmpeg-macos.sh), so lipo merges them into one universal binary
+# at the canonical Resources path.
+echo "lipo-merging ffprobe (per-arch inputs)"
+lipo -create -output "${RES_DIR}/ffprobe" \
+    "${AARCH64_DEPS_DIR}/ffprobe" \
+    "${X86_64_DEPS_DIR}/ffprobe"
+
 # Bundle the LGPL license text. Pick whichever per-arch copy the build
 # script produced — both are equivalent (same upstream source tarball).
 if [[ -f "${AARCH64_DEPS_DIR}/ffmpeg-LICENSE.txt" ]]; then
@@ -97,7 +106,8 @@ fi
 cp "$(dirname "$0")/yt-dlp-LICENSE.txt" "${RES_DIR}/yt-dlp-LICENSE.txt"
 
 chmod +x "${MACOS_DIR}/yt-dlp-ui" "${MACOS_DIR}/ad-window" \
-         "${RES_DIR}/yt-dlp" "${RES_DIR}/deno" "${RES_DIR}/ffmpeg"
+         "${RES_DIR}/yt-dlp" "${RES_DIR}/deno" "${RES_DIR}/ffmpeg" \
+         "${RES_DIR}/ffprobe"
 
 # Version-template Info.plist via sed. The template has CFBundleVersion and
 # CFBundleShortVersionString set to "0.1.0"; replace both with $VERSION.

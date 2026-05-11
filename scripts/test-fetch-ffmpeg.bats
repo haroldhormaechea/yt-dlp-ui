@@ -128,8 +128,10 @@ teardown() {
 
 # Build the three target-triple archives the script's closed-set map covers.
 # Each archive's top-level dir matches the asset name (minus extension), with
-# `bin/ffmpeg` (or `bin/ffmpeg.exe` for Windows) inside. License text is
-# placed at the top-level so the script's LICENSE-locate loop finds it.
+# `bin/ffmpeg` AND `bin/ffprobe` (or `.exe` variants for Windows) inside —
+# UC 28 staged ffprobe alongside ffmpeg in the same BtbN archive, so the
+# fixture mirrors that layout. License text is placed at the top-level so
+# the script's LICENSE-locate loop finds it.
 build_archives() {
     local release_tag="n7.1.4"
     for triple_pair in \
@@ -144,9 +146,12 @@ build_archives() {
         mkdir -p "${stage}/${asset_base}/bin"
         if [[ "${triple}" == "win64" ]]; then
             printf '#!/bin/sh\nexit 0\n' > "${stage}/${asset_base}/bin/ffmpeg.exe"
+            printf '#!/bin/sh\nexit 0\n' > "${stage}/${asset_base}/bin/ffprobe.exe"
         else
             printf '#!/bin/sh\nexit 0\n' > "${stage}/${asset_base}/bin/ffmpeg"
             chmod +x "${stage}/${asset_base}/bin/ffmpeg"
+            printf '#!/bin/sh\nexit 0\n' > "${stage}/${asset_base}/bin/ffprobe"
+            chmod +x "${stage}/${asset_base}/bin/ffprobe"
         fi
         printf 'LGPL-2.1 fixture license\n' > "${stage}/${asset_base}/LICENSE.txt"
 
@@ -247,6 +252,10 @@ stage_script() {
     [ -x "${OUT_DIR}/ffmpeg" ]
     # No .exe on Unix output.
     [ ! -f "${OUT_DIR}/ffmpeg.exe" ]
+    # UC 28: ffprobe is staged from the same archive alongside ffmpeg.
+    [ -f "${OUT_DIR}/ffprobe" ]
+    [ -x "${OUT_DIR}/ffprobe" ]
+    [ ! -f "${OUT_DIR}/ffprobe.exe" ]
     # License text dropped alongside per fetch-ffmpeg.sh's redistribution rule.
     [ -f "${OUT_DIR}/ffmpeg-LICENSE.txt" ]
     # Stub-built archive carried "LGPL-2.1 fixture license" — assert the
@@ -260,6 +269,9 @@ stage_script() {
     run bash "${script}" aarch64-unknown-linux-gnu "${OUT_DIR}"
     [ "$status" -eq 0 ]
     [ -f "${OUT_DIR}/ffmpeg" ]
+    # UC 28: ffprobe staged from same archive — same exec-bit / no-.exe contract.
+    [ -f "${OUT_DIR}/ffprobe" ]
+    [ -x "${OUT_DIR}/ffprobe" ]
     [[ "$output" == *"linuxarm64-lgpl"* ]]
 }
 
@@ -273,6 +285,9 @@ stage_script() {
     # destination is named `ffmpeg` (no extension), matching paths.rs Windows
     # canonical-name fallback.
     [ ! -f "${OUT_DIR}/ffmpeg.exe" ]
+    # UC 28: ffprobe follows the same canonical-name-on-every-OS contract.
+    [ -f "${OUT_DIR}/ffprobe" ]
+    [ ! -f "${OUT_DIR}/ffprobe.exe" ]
 }
 
 # --- macOS hard-fail ---------------------------------------------------------

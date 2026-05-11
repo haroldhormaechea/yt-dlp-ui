@@ -41,11 +41,17 @@ check() {
 
 CONTENTS="$(dpkg-deb -c "${DEB}")"
 
+# UC 17 closed the ffmpeg-coverage gap on the .deb layout; UC 28 extends
+# the inventory with /opt/yt-dlp-ui/ffprobe so a partial-staging regression
+# on either binary trips this test instead of silently shipping a broken
+# package.
 for path in \
     /opt/yt-dlp-ui/yt-dlp-ui \
     /opt/yt-dlp-ui/ad-window \
     /opt/yt-dlp-ui/yt-dlp \
     /opt/yt-dlp-ui/deno \
+    /opt/yt-dlp-ui/ffmpeg \
+    /opt/yt-dlp-ui/ffprobe \
     /usr/bin/yt-dlp-ui \
     /usr/share/doc/yt-dlp-ui/LICENSE \
     /usr/share/doc/yt-dlp-ui/yt-dlp-LICENSE.txt
@@ -58,12 +64,16 @@ do
     fi
 done
 
-# Exec-bit checks on the four binaries + the launcher wrapper.
+# Exec-bit checks on every bundled binary + the launcher wrapper. UC 17 +
+# UC 28 expand from {yt-dlp-ui, ad-window, yt-dlp, deno} to also include
+# ffmpeg + ffprobe — both must be `0755` per the nfpm stage.
 for path in \
     /opt/yt-dlp-ui/yt-dlp-ui \
     /opt/yt-dlp-ui/ad-window \
     /opt/yt-dlp-ui/yt-dlp \
     /opt/yt-dlp-ui/deno \
+    /opt/yt-dlp-ui/ffmpeg \
+    /opt/yt-dlp-ui/ffprobe \
     /usr/bin/yt-dlp-ui
 do
     MODE="$(echo "${CONTENTS}" | awk -v p=".${path}" '$NF == p {print $1}')"

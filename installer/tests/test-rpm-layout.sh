@@ -26,11 +26,17 @@ EXIT_CODE=0
 
 CONTENTS="$(rpm -qpl "${RPM}")"
 
+# UC 17 closed the ffmpeg-coverage gap on the .rpm layout; UC 28 extends
+# the inventory with /opt/yt-dlp-ui/ffprobe so a partial-staging regression
+# on either binary trips this test instead of silently shipping a broken
+# package.
 for path in \
     /opt/yt-dlp-ui/yt-dlp-ui \
     /opt/yt-dlp-ui/ad-window \
     /opt/yt-dlp-ui/yt-dlp \
     /opt/yt-dlp-ui/deno \
+    /opt/yt-dlp-ui/ffmpeg \
+    /opt/yt-dlp-ui/ffprobe \
     /usr/bin/yt-dlp-ui \
     /usr/share/doc/yt-dlp-ui/LICENSE \
     /usr/share/doc/yt-dlp-ui/yt-dlp-LICENSE.txt
@@ -45,12 +51,16 @@ done
 
 # Exec-bit / mode check via `rpm -qplv` (note: -l lists files; without -l,
 # rpm -qpv emits only package metadata and contains no file paths).
+# UC 17 + UC 28 expand from {yt-dlp-ui, ad-window, yt-dlp, deno} to also
+# include ffmpeg + ffprobe — both must be `0755` per the nfpm stage.
 PERMS="$(rpm -qplv "${RPM}")"
 for path in \
     /opt/yt-dlp-ui/yt-dlp-ui \
     /opt/yt-dlp-ui/ad-window \
     /opt/yt-dlp-ui/yt-dlp \
     /opt/yt-dlp-ui/deno \
+    /opt/yt-dlp-ui/ffmpeg \
+    /opt/yt-dlp-ui/ffprobe \
     /usr/bin/yt-dlp-ui
 do
     MODE="$(echo "${PERMS}" | awk -v p="${path}" '$NF == p {print $1}')"

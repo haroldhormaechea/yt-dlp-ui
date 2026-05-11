@@ -82,7 +82,7 @@ fn seed_typical_state(window: &MainWindow, total: i32, in_flight: i32) {
 /// queue (5 total, 1 in-flight). Pins that every property write the host
 /// performs (counts, body lines, label, open) is accepted by the generated
 /// bindings and that the modal subtree (backdrop, centered card, ghost +
-/// danger DButton pair) compiles and constructs.
+/// danger `DButton` pair) compiles and constructs.
 #[test]
 fn remove_all_modal_constructs_with_typical_seeded_state() {
     let Some(window) = try_make_window() else {
@@ -208,8 +208,8 @@ fn remove_all_modal_handles_theme_flip_with_modal_open() {
     assert!(!window.get_remove_all_confirm_open());
 }
 
-/// AC #13 z-order — the Remove-all confirm modal stacks above SettingsPanel
-/// (UC 09), the About modal (UC 18), and BotCheckModal (UC 10). The actual
+/// AC #13 z-order — the Remove-all confirm modal stacks above `SettingsPanel`
+/// (UC 09), the About modal (UC 18), and `BotCheckModal` (UC 10). The actual
 /// stacking is enforced by mount order in `main_window.slint`; this test
 /// pins that the host can have all four open-state properties true
 /// simultaneously without the construction panicking, which would happen if

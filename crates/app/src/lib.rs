@@ -58,6 +58,7 @@ slint::include_modules!();
 /// # Errors
 ///
 /// Any [`AppError`] variant — see the type's docs.
+#[allow(clippy::too_many_lines)] // startup orchestration; splitting adds noise
 pub fn run() -> Result<(), AppError> {
     // 1. App-data dir.
     let app_data = paths::app_data_dir()?;
@@ -137,6 +138,53 @@ pub fn run() -> Result<(), AppError> {
             None
         }
     };
+
+    // UC 28: ffprobe is required for yt-dlp's audio-only ExtractAudio
+    // post-processor and several metadata-probing paths. The bridge passes
+    // `--ffmpeg-location <parent_dir>` and yt-dlp discovers both binaries
+    // from that directory, so the staging path is what determines runtime
+    // behaviour — we don't need a new bridge flag. We log resolution here
+    // for diagnostic value (matches ffmpeg's pattern) but don't gate spawn
+    // on it: yt-dlp surfaces a runtime "ffprobe not found" error if the
+    // binary is missing at the configured directory, which is the user-
+    // visible signal we want.
+    let ffprobe_path = match paths::bundled_ffprobe_path() {
+        Ok(p) => {
+            tracing::info!(ffprobe = %p.display(), "resolved ffprobe binary");
+            Some(p)
+        }
+        Err(err) => {
+            tracing::warn!(
+                ?err,
+                "ffprobe unavailable; audio-only downloads and metadata probing may error"
+            );
+            None
+        }
+    };
+
+    // UC 28 co-location invariant: yt-dlp's `--ffmpeg-location <dir>`
+    // discovers both `ffmpeg` and `ffprobe` from a single directory. When
+    // both binaries resolve, their parents MUST be equal — otherwise the
+    // directory we pass to yt-dlp can only point at one of them and the
+    // other will be reported "not found". An invariant violation indicates
+    // a packaging or path-resolver bug; log ERROR for diagnostic but don't
+    // block startup — yt-dlp will surface the runtime failure on the
+    // affected operations and the log line links the user-visible error
+    // to the staging mismatch.
+    if let (Some(ffm), Some(ffp)) = (ffmpeg_path.as_ref(), ffprobe_path.as_ref())
+        && let (Some(ffm_dir), Some(ffp_dir)) = (ffm.parent(), ffp.parent())
+        && ffm_dir != ffp_dir
+    {
+        tracing::error!(
+            ffmpeg = %ffm.display(),
+            ffprobe = %ffp.display(),
+            "ffmpeg and ffprobe are not co-located; yt-dlp --ffmpeg-location can only point at one directory and the other binary will be reported missing at runtime"
+        );
+    }
+    // The bridge picks ffprobe up via yt-dlp's `--ffmpeg-location <parent_dir>`
+    // flag (no separate ffprobe-path plumbing into DownloadRequest — see
+    // UC 28 § "Bridge — no API change"). `ffprobe_path` is bound for the
+    // co-location check + diagnostic logging only; it drops at function end.
 
     // UC 08: per-row thumbnail cache lives at <app-data>/thumbnails/. Created
     // lazily on first fetch by the `thumbnails` module; we just compute the

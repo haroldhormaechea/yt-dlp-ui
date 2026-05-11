@@ -81,7 +81,14 @@ jobs:
         id: cache_ffmpeg_aarch64
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:
-          path: runtime-deps/aarch64/ffmpeg
+          # UC 28: cache must cover ffprobe and the LICENSE text alongside
+          # ffmpeg, otherwise a cache hit re-runs only the build script's
+          # ffmpeg-copy step and the ffprobe (or LICENSE) staging gets
+          # skipped, breaking package-dmg.
+          path: |
+            runtime-deps/aarch64/ffmpeg
+            runtime-deps/aarch64/ffprobe
+            runtime-deps/aarch64/ffmpeg-LICENSE.txt
           key: ffmpeg-aarch64-${{ steps.ffmpeg_pins.outputs.version_source }}-${{ steps.ffmpeg_pins.outputs.tarball_sha256 }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
 
       - name: Build ffmpeg (aarch64) on cache miss
@@ -96,7 +103,12 @@ jobs:
         id: cache_ffmpeg_x86_64
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:
-          path: runtime-deps/x86_64/ffmpeg
+          # UC 28: see aarch64 cache step for rationale on the multi-path
+          # entry (ffprobe + LICENSE must travel with ffmpeg).
+          path: |
+            runtime-deps/x86_64/ffmpeg
+            runtime-deps/x86_64/ffprobe
+            runtime-deps/x86_64/ffmpeg-LICENSE.txt
           key: ffmpeg-x86_64-${{ steps.ffmpeg_pins.outputs.version_source }}-${{ steps.ffmpeg_pins.outputs.tarball_sha256 }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
 
       - name: Build ffmpeg (x86_64) on cache miss
@@ -118,6 +130,10 @@ jobs:
           # binary, but on a cache hit only the binary survives. Re-derive
           # the license text from the source tarball if missing. Cheap,
           # only runs on cache hit.
+          # TODO: UC 28 follow-up — remove this belt-and-suspenders synth
+          # block after one successful release where the per-arch cache
+          # entry's multi-line `path:` (ffmpeg + ffprobe + ffmpeg-LICENSE.txt)
+          # is confirmed to round-trip the license file via cache hits.
           for arch in aarch64 x86_64; do
               license="runtime-deps/${arch}/ffmpeg-LICENSE.txt"
               if [[ ! -f "${license}" ]]; then

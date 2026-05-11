@@ -405,6 +405,315 @@ fn linux_helper_returns_next_to_binary_for_ffmpeg() {
     );
 }
 
+// -- UC 28: bundled_ffprobe_path() per-OS coverage -------------------------
+//
+// Mirrors the bundled_ffmpeg_path test set line-for-line: on each OS,
+// `bundled_ffprobe_path` returns Ok(<exe_dir>/ffprobe[.exe]) when the file
+// exists next to the running test binary, and Err(BundledMissing { .. })
+// when it is absent (modulo dev `$PATH` fallback). The fetch / build / stage
+// protocol for ffprobe is identical to ffmpeg's (BtbN archive extraction on
+// Linux + Windows, lipo-merged build artifact on macOS) so the runtime
+// resolver's per-OS shape must match exactly.
+//
+// These tests share `BUNDLED_PROBE_LOCK` with the yt-dlp / deno / ffmpeg
+// probes because they all mutate the cargo profile dir. Any test that
+// stages or removes a binary next to `current_exe` MUST hold the mutex.
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_bundled_ffprobe_path_returns_ok_when_next_to_binary() {
+    let _guard = BUNDLED_PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let exe_dir = current_exe_dir();
+    let ffprobe_path = exe_dir.join("ffprobe");
+    let _ = std::fs::remove_file(&ffprobe_path);
+    std::fs::write(&ffprobe_path, b"#!/bin/sh\nexit 0\n").expect("write ffprobe");
+
+    let resolved = paths::bundled_ffprobe_path();
+    let cleanup = std::fs::remove_file(&ffprobe_path);
+
+    match resolved {
+        Ok(p) => assert_eq!(
+            p, ffprobe_path,
+            "bundled ffprobe must point at the file next to the running exe"
+        ),
+        Err(e) => panic!("expected Ok, got Err({e:?})"),
+    }
+    cleanup.expect("cleanup ffprobe");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_bundled_ffprobe_path_returns_err_when_absent_and_no_path_match() {
+    // When `<exe_dir>/ffprobe` does not exist AND `$PATH` has no `ffprobe`,
+    // the resolver returns BundledMissing. We can't reliably guarantee
+    // that ffprobe is absent from CI's $PATH (some images have it as part
+    // of an ffmpeg system install), so we scope the assertion to "Err is
+    // BundledMissing OR Ok points at a $PATH location". The first branch
+    // is the production case for clean installs; the second is the dev
+    // fallback. Mirrors the ffmpeg-equivalent regression posture.
+    let _guard = BUNDLED_PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let exe_dir = current_exe_dir();
+    let ffprobe_path = exe_dir.join("ffprobe");
+    let _ = std::fs::remove_file(&ffprobe_path);
+
+    let resolved = paths::bundled_ffprobe_path();
+    match resolved {
+        Err(paths::PathError::BundledMissing { .. }) => {}
+        Ok(p) => {
+            assert_ne!(
+                p, ffprobe_path,
+                "with no file next to the binary, Ok must come from the $PATH dev fallback, \
+                 not the next-to-binary candidate"
+            );
+        }
+        Err(e) => panic!("unexpected error variant: {e:?}"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_bundled_ffprobe_path_returns_ok_when_next_to_binary() {
+    let _guard = BUNDLED_PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let exe_dir = current_exe_dir();
+    let ffprobe_path = exe_dir.join("ffprobe");
+    let _ = std::fs::remove_file(&ffprobe_path);
+    std::fs::write(&ffprobe_path, b"#!/bin/sh\nexit 0\n").expect("write ffprobe");
+
+    let resolved = paths::bundled_ffprobe_path();
+    let cleanup = std::fs::remove_file(&ffprobe_path);
+
+    match resolved {
+        Ok(p) => assert_eq!(
+            p, ffprobe_path,
+            "bundled ffprobe must point at the file next to the running exe"
+        ),
+        Err(e) => panic!("expected Ok, got Err({e:?})"),
+    }
+    cleanup.expect("cleanup ffprobe");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_bundled_ffprobe_path_returns_err_when_absent_and_no_path_match() {
+    let _guard = BUNDLED_PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let exe_dir = current_exe_dir();
+    let ffprobe_path = exe_dir.join("ffprobe");
+    let _ = std::fs::remove_file(&ffprobe_path);
+
+    let resolved = paths::bundled_ffprobe_path();
+    match resolved {
+        Err(paths::PathError::BundledMissing { .. }) => {}
+        Ok(p) => {
+            assert_ne!(
+                p, ffprobe_path,
+                "with no file next to the binary, Ok must come from the $PATH dev fallback"
+            );
+        }
+        Err(e) => panic!("unexpected error variant: {e:?}"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_bundled_ffprobe_path_returns_ok_when_exe_next_to_binary() {
+    let _guard = BUNDLED_PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let exe_dir = current_exe_dir();
+    let ffprobe_exe = exe_dir.join("ffprobe.exe");
+    let canonical = exe_dir.join("ffprobe");
+    // Defensive cleanup of either form.
+    let _ = std::fs::remove_file(&ffprobe_exe);
+    let _ = std::fs::remove_file(&canonical);
+    std::fs::write(&ffprobe_exe, b"@echo potato\r\n").expect("write ffprobe.exe");
+
+    let resolved = paths::bundled_ffprobe_path();
+    let cleanup = std::fs::remove_file(&ffprobe_exe);
+
+    match resolved {
+        Ok(p) => assert_eq!(
+            p, ffprobe_exe,
+            "Windows bundled ffprobe must prefer ffprobe.exe when present"
+        ),
+        Err(e) => panic!("expected Ok, got Err({e:?})"),
+    }
+    cleanup.expect("cleanup ffprobe.exe");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_bundled_ffprobe_path_falls_back_to_canonical_name() {
+    // Mirror the ffmpeg / yt-dlp Smoke 1 outcome: when no `.exe` is present,
+    // the resolver probes the bare `ffprobe` filename. fetch-ffmpeg.sh /
+    // fetch-ffmpeg.ps1 emit the canonical no-extension name on every OS for
+    // ffprobe too, so this branch is the actual production path on Windows.
+    let _guard = BUNDLED_PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let exe_dir = current_exe_dir();
+    let ffprobe_exe = exe_dir.join("ffprobe.exe");
+    let canonical = exe_dir.join("ffprobe");
+    let _ = std::fs::remove_file(&ffprobe_exe);
+    let _ = std::fs::remove_file(&canonical);
+    std::fs::write(&canonical, b"@echo potato\r\n").expect("write ffprobe");
+
+    let resolved = paths::bundled_ffprobe_path();
+    let cleanup = std::fs::remove_file(&canonical);
+
+    match resolved {
+        Ok(p) => assert_eq!(
+            p, canonical,
+            "Windows must fall back to canonical 'ffprobe' (no ext) when .exe absent"
+        ),
+        Err(e) => panic!("expected Ok, got Err({e:?})"),
+    }
+    cleanup.expect("cleanup ffprobe");
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_bundled_ffprobe_path_returns_err_when_neither_present() {
+    let _guard = BUNDLED_PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let exe_dir = current_exe_dir();
+    let _ = std::fs::remove_file(exe_dir.join("ffprobe.exe"));
+    let _ = std::fs::remove_file(exe_dir.join("ffprobe"));
+
+    let resolved = paths::bundled_ffprobe_path();
+    match resolved {
+        Err(paths::PathError::BundledMissing { .. }) => {}
+        Ok(p) => {
+            // Dev fallback only — not next to the binary.
+            assert_ne!(p, exe_dir.join("ffprobe.exe"));
+            assert_ne!(p, exe_dir.join("ffprobe"));
+        }
+        Err(e) => panic!("unexpected error variant: {e:?}"),
+    }
+}
+
+// -- UC 28: expected_bundled_ffprobe_path_from per-OS branches -------------
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_resources_branch_ffprobe() {
+    // Mirrors `macos_resources_branch_ffmpeg`: ffprobe co-locates with
+    // ffmpeg under <Contents/Resources>/, not next to the main binary at
+    // <Contents/MacOS>/.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let macos_dir = tmp.path().join("Contents").join("MacOS");
+    let resources_dir = tmp.path().join("Contents").join("Resources");
+    std::fs::create_dir_all(&macos_dir).expect("mkdir MacOS");
+    std::fs::create_dir_all(&resources_dir).expect("mkdir Resources");
+    std::fs::write(macos_dir.join("yt-dlp-ui"), b"main-binary").expect("write main");
+    let bundled = resources_dir.join("ffprobe");
+    std::fs::write(&bundled, b"#!/bin/sh\nexit 0\n").expect("write ffprobe");
+
+    let resolved = paths::expected_bundled_ffprobe_path_from(&macos_dir);
+    assert_eq!(
+        resolved, bundled,
+        "macOS Resources branch must resolve ffprobe → <Contents/Resources/ffprobe>"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_dev_fallback_ffprobe_when_no_contents_parent() {
+    // Cargo dev layout: target/<profile>/app, no `.app/Contents/MacOS`
+    // wrapping. The helper must fall through to `<exe_dir>/ffprobe`.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("yt-dlp-ui"), b"main").expect("write main");
+    let bundled = tmp.path().join("ffprobe");
+
+    let resolved = paths::expected_bundled_ffprobe_path_from(tmp.path());
+    assert_eq!(
+        resolved, bundled,
+        "macOS dev layout (no Contents/ parent) must resolve ffprobe next-to-binary"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_resources_branch_skipped_when_resources_ffprobe_absent() {
+    // Co-location-invariant guard mirroring the ffmpeg-equivalent: if
+    // `Contents/Resources/ffprobe` is missing, the helper must NOT silently
+    // return the non-existent Resources path; it falls through to the
+    // next-to-binary candidate. This is what makes the startup co-location
+    // ERROR log fire on a partial bundle (ffmpeg present + ffprobe absent
+    // or vice versa).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let macos_dir = tmp.path().join("Contents").join("MacOS");
+    let resources_dir = tmp.path().join("Contents").join("Resources");
+    std::fs::create_dir_all(&macos_dir).expect("mkdir MacOS");
+    std::fs::create_dir_all(&resources_dir).expect("mkdir Resources");
+    std::fs::write(macos_dir.join("yt-dlp-ui"), b"main").expect("write main");
+
+    let resolved = paths::expected_bundled_ffprobe_path_from(&macos_dir);
+    assert_eq!(
+        resolved,
+        macos_dir.join("ffprobe"),
+        "missing Resources/ffprobe must fall through to <exe_dir>/ffprobe"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_helper_prefers_exe_over_canonical_for_ffprobe() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let exe = tmp.path().join("ffprobe.exe");
+    let canonical = tmp.path().join("ffprobe");
+    std::fs::write(&exe, b"exe").expect("write exe");
+    std::fs::write(&canonical, b"canonical").expect("write canonical");
+
+    let resolved = paths::expected_bundled_ffprobe_path_from(tmp.path());
+    assert_eq!(
+        resolved, exe,
+        "Windows must prefer ffprobe.exe over canonical 'ffprobe'"
+    );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_helper_falls_back_to_canonical_for_ffprobe() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let canonical = tmp.path().join("ffprobe");
+    std::fs::write(&canonical, b"canonical").expect("write canonical");
+
+    let resolved = paths::expected_bundled_ffprobe_path_from(tmp.path());
+    assert_eq!(
+        resolved, canonical,
+        "Windows must fall back to canonical 'ffprobe' (no ext) when .exe absent"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_helper_returns_next_to_binary_for_ffprobe() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    // Linux helper does not need the file to exist to return the candidate.
+    let resolved = paths::expected_bundled_ffprobe_path_from(tmp.path());
+    assert_eq!(
+        resolved,
+        tmp.path().join("ffprobe"),
+        "Linux ffprobe helper must resolve to <exe_dir>/ffprobe"
+    );
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn linux_bundled_deno_path_returns_some_when_next_to_binary() {

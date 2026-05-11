@@ -13,6 +13,7 @@ fn main() {
     slint_build::compile("ui/main_window.slint").expect("failed to compile Slint UI");
     bundle_yt_dlp_wrapper_for_dev();
     bundle_dev_ffmpeg();
+    bundle_dev_ffprobe();
     bake_runtime_pins();
 }
 
@@ -354,6 +355,98 @@ fn try_fetch_dev_ffmpeg(_workspace_root: &Path) {
     println!(
         "cargo:warning=auto-fetch of ffmpeg is Unix-only; on Windows run `just fetch-runtime-deps` manually"
     );
+}
+
+/// UC 28: copies the dev `runtime-deps/ffprobe` next to the cargo-produced
+/// `app` binary so `cargo run` can invoke yt-dlp's audio-only post-processor
+/// without a system-wide install.
+///
+/// Identical in shape to [`bundle_dev_ffmpeg`]; the comment block there
+/// covers the design rationale (warn-not-fail on missing source, copy-not-
+/// symlink so rotations propagate, Windows `.exe` rename mirrors the
+/// dev-wrapper convention). The fetch-script path is shared with ffmpeg —
+/// `fetch-ffmpeg.sh` extracts both binaries from a single archive — so a
+/// best-effort fetch is delegated to [`try_fetch_dev_ffmpeg`] without a
+/// dedicated `try_fetch_dev_ffprobe`. When the ffmpeg fetch succeeds,
+/// ffprobe is staged at `runtime-deps/ffprobe` as a side effect.
+fn bundle_dev_ffprobe() {
+    println!("cargo:rerun-if-env-changed=CARGO_DIST_TARGET");
+    println!("cargo:rerun-if-env-changed=DIST_TARGET");
+    println!("cargo:rerun-if-env-changed=YT_DLP_UI_FETCH_DEPS");
+    println!("cargo:rerun-if-env-changed=PROFILE");
+
+    if std::env::var_os("CARGO_DIST_TARGET").is_some() || std::env::var_os("DIST_TARGET").is_some()
+    {
+        return;
+    }
+
+    let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from) else {
+        println!("cargo:warning=CARGO_MANIFEST_DIR not set; skipping dev ffprobe bundling");
+        return;
+    };
+    let Some(workspace_root) = find_workspace_root(&manifest_dir) else {
+        return;
+    };
+    let Some(out_dir) = std::env::var_os("OUT_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let Some(profile_dir) = profile_dir_from_out_dir(&out_dir) else {
+        return;
+    };
+
+    let runtime_deps = workspace_root.join("runtime-deps");
+    let bin_name = if cfg!(target_os = "windows") {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    };
+    let source = runtime_deps.join("ffprobe");
+    let dest = profile_dir.join(bin_name);
+
+    let fetch_allowed = std::env::var("YT_DLP_UI_FETCH_DEPS").map_or(true, |v| v != "0");
+
+    if !source.is_file() {
+        if !fetch_allowed {
+            println!(
+                "cargo:warning=runtime-deps/ffprobe missing and YT_DLP_UI_FETCH_DEPS=0; audio-only downloads will error — run `just fetch-runtime-deps`"
+            );
+            return;
+        }
+        // fetch-ffmpeg.{sh,ps1} extract ffprobe from the same archive as
+        // ffmpeg, so the ffmpeg-side fetch attempt also stages ffprobe.
+        // We re-invoke it here only if ffmpeg's own pass did not produce
+        // the file (e.g., a partial archive layout).
+        if !runtime_deps.join("ffmpeg").is_file() {
+            try_fetch_dev_ffmpeg(&workspace_root);
+        }
+        if !source.is_file() {
+            println!(
+                "cargo:warning=runtime-deps/ffprobe unavailable after fetch attempt; audio-only downloads will error — run `just fetch-runtime-deps`"
+            );
+            return;
+        }
+    }
+
+    if let Err(err) = std::fs::copy(&source, &dest) {
+        println!(
+            "cargo:warning=failed to copy {} -> {}: {err}",
+            source.display(),
+            dest.display()
+        );
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&dest) {
+            let mut perm = meta.permissions();
+            perm.set_mode(0o755);
+            let _ = std::fs::set_permissions(&dest, perm);
+        }
+    }
+
+    println!("cargo:rerun-if-changed={}", source.display());
 }
 
 /// UC 18: parse `scripts/runtime-deps-pins.env` and bake the pinned versions

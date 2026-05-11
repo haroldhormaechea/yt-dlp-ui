@@ -160,6 +160,9 @@ jobs:
           Copy-Item 'runtime-deps/yt-dlp' "$src/yt-dlp"
           Copy-Item 'runtime-deps/deno'   "$src/deno"
           Copy-Item 'runtime-deps/ffmpeg' "$src/ffmpeg"
+          # UC 28: stage ffprobe alongside ffmpeg. fetch-ffmpeg.ps1 now
+          # extracts both binaries from the same BtbN archive.
+          Copy-Item 'runtime-deps/ffprobe' "$src/ffprobe"
           Copy-Item 'runtime-deps/ffmpeg-LICENSE.txt' "$src/ffmpeg-LICENSE.txt"
           Copy-Item 'installer/yt-dlp-LICENSE.txt'    "$src/yt-dlp-LICENSE.txt"
           Copy-Item 'LICENSE'             "$src/LICENSE"

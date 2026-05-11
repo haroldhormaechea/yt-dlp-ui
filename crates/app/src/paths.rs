@@ -349,6 +349,106 @@ fn scan_path_for_ffmpeg() -> Option<PathBuf> {
     scan_path_for(bin)
 }
 
+/// Resolves the path to the bundled `ffprobe` binary.
+///
+/// Mirrors [`bundled_ffmpeg_path`] in shape — `Result<PathBuf, PathError>`
+/// rather than `Option`, so the type discipline forces every caller (the
+/// `app` crate's `run` in particular) to handle [`PathError::BundledMissing`]
+/// explicitly. In dev builds the resolver falls back to a `$PATH` scan so
+/// `cargo run` works without a full install.
+///
+/// UC 28: yt-dlp's audio-only post-processing path (`ExtractAudio`) needs
+/// ffprobe in addition to ffmpeg. The bridge passes `--ffmpeg-location
+/// <parent_dir>` and yt-dlp discovers both binaries from that directory;
+/// staging ffprobe at the canonical bundled path is what makes that
+/// discovery succeed. The co-location invariant is checked at startup in
+/// `lib.rs::run`.
+///
+/// Per-OS bundled path table (mirrors ffmpeg; see `PROJECT_BRIEF.md`
+/// § Architecture § Bundled-binary path):
+///
+/// | OS | Binary location |
+/// |---|---|
+/// | Linux | `<install_prefix>/ffprobe` (next to `app`) |
+/// | macOS | `yt-dlp-ui.app/Contents/Resources/ffprobe` |
+/// | Windows | `<install_prefix>\ffprobe.exe` (next to `app.exe`) |
+///
+/// # Errors
+///
+/// Returns [`PathError::BundledMissing`] if the binary is not found at the
+/// expected location and (in dev) is also not on `$PATH`.
+pub fn bundled_ffprobe_path() -> Result<PathBuf, PathError> {
+    let expected = expected_bundled_ffprobe_path();
+    if expected.is_file() {
+        return Ok(expected);
+    }
+
+    if cfg!(debug_assertions) {
+        tracing::warn!(
+            "bundled ffprobe not found at {}; scanning $PATH (dev fallback)",
+            expected.display()
+        );
+        if let Some(path) = scan_path_for_ffprobe() {
+            return Ok(path);
+        }
+    }
+
+    Err(PathError::BundledMissing {
+        expected: expected.display().to_string(),
+    })
+}
+
+fn expected_bundled_ffprobe_path() -> PathBuf {
+    let exe_dir = current_exe_dir();
+    expected_bundled_ffprobe_path_from(&exe_dir)
+}
+
+/// Resolves the bundled `ffprobe` path relative to a given exe directory.
+///
+/// Public-within-crate so `paths_test.rs` can stage tempdir layouts and
+/// exercise the per-OS branches without going through `current_exe()`. The
+/// shape matches [`expected_bundled_ffmpeg_path_from`] specialized to
+/// `ffprobe`.
+pub(crate) fn expected_bundled_ffprobe_path_from(exe_dir: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(contents) = exe_dir.parent() {
+            let resources = contents.join("Resources").join("ffprobe");
+            if resources.is_file() {
+                return resources;
+            }
+        }
+        exe_dir.join("ffprobe")
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let exe_path = exe_dir.join("ffprobe.exe");
+        if exe_path.is_file() {
+            return exe_path;
+        }
+        let canonical = exe_dir.join("ffprobe");
+        if canonical.is_file() {
+            return canonical;
+        }
+        exe_path
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        exe_dir.join("ffprobe")
+    }
+}
+
+fn scan_path_for_ffprobe() -> Option<PathBuf> {
+    let bin = if cfg!(target_os = "windows") {
+        "ffprobe.exe"
+    } else {
+        "ffprobe"
+    };
+    scan_path_for(bin)
+}
+
 /// On macOS, removes the `com.apple.quarantine` extended attribute from each
 /// bundled binary located next to (or under `Resources/` from) the running
 /// executable. Idempotent: if the attribute is not present, `xattr -d` exits
@@ -373,6 +473,7 @@ pub fn strip_macos_quarantine_if_needed() {
         let candidates = [
             exe_dir.join("yt-dlp"),
             exe_dir.join("ffmpeg"),
+            exe_dir.join("ffprobe"),
             exe_dir.join("deno"),
             resources_dir
                 .as_ref()
@@ -381,6 +482,10 @@ pub fn strip_macos_quarantine_if_needed() {
             resources_dir
                 .as_ref()
                 .map(|d| d.join("ffmpeg"))
+                .unwrap_or_default(),
+            resources_dir
+                .as_ref()
+                .map(|d| d.join("ffprobe"))
                 .unwrap_or_default(),
             resources_dir
                 .as_ref()

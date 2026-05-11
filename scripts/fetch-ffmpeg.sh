@@ -33,14 +33,21 @@
 #   6. Extract the archive; copy the bare `ffmpeg` binary to
 #      <output-dir>/ffmpeg (canonical no-extension name on every OS,
 #      mirroring fetch-yt-dlp.sh's posture). chmod +x on Unix.
-#   7. Drop the archive's bundled LICENSE / GPL / LGPL text alongside as
+#   7. UC 28: also copy `ffprobe` from the same archive to
+#      <output-dir>/ffprobe (canonical no-extension name on every OS).
+#      yt-dlp's `--ffmpeg-location <dir>` already discovers both binaries
+#      when co-located. chmod +x on Unix.
+#   8. Drop the archive's bundled LICENSE / GPL / LGPL text alongside as
 #      <output-dir>/ffmpeg-LICENSE.txt for redistribution compliance.
+#      ffprobe ships under the same LGPL terms (single FFmpeg
+#      distribution); no separate license file.
 #
 # Exit codes (mirror fetch-yt-dlp.sh's contract):
 #   64 — usage / unknown target triple / asset name failed lgpl guard
 #   65 — required env var missing
 #   70 — neither sha256sum nor shasum available
-#   72 — asset not listed in remote checksums.sha256
+#   72 — asset not listed in remote checksums.sha256 / ffmpeg or ffprobe
+#        binary not found inside extracted archive
 #   73 — SHA mismatch (in-tree pin OR remote defense-in-depth)
 #   75 — pins file not found
 #
@@ -202,6 +209,31 @@ case "${TARGET_TRIPLE}" in
     *) chmod +x "${DEST}" ;;
 esac
 
+# UC 28: locate and stage ffprobe alongside ffmpeg from the same archive.
+# BtbN LGPL builds include ffprobe in the same `bin/` directory; no second
+# download required. Co-locating ffprobe with ffmpeg lets yt-dlp discover
+# both via the single `--ffmpeg-location <dir>` flag (the bridge already
+# passes the parent directory).
+FFPROBE_BIN=""
+for cand in "${EXTRACTED_DIR}/bin/ffprobe" "${EXTRACTED_DIR}/bin/ffprobe.exe" \
+            "${EXTRACTED_DIR}/ffprobe" "${EXTRACTED_DIR}/ffprobe.exe"; do
+    if [[ -f "${cand}" ]]; then
+        FFPROBE_BIN="${cand}"
+        break
+    fi
+done
+if [[ -z "${FFPROBE_BIN}" ]]; then
+    echo "error: ffprobe binary not found inside extracted archive" >&2
+    exit 72
+fi
+
+FFPROBE_DEST="${OUTPUT_DIR}/ffprobe"
+cp -f "${FFPROBE_BIN}" "${FFPROBE_DEST}"
+case "${TARGET_TRIPLE}" in
+    *windows*) ;;
+    *) chmod +x "${FFPROBE_DEST}" ;;
+esac
+
 # Drop the bundled license text alongside, for redistribution compliance.
 LICENSE_DEST="${OUTPUT_DIR}/ffmpeg-LICENSE.txt"
 LICENSE_SRC=""
@@ -233,3 +265,4 @@ EOF
 fi
 
 echo "placed ${DEST} (ffmpeg ${FFMPEG_RELEASE_TAG}, ${TARGET_TRIPLE})"
+echo "placed ${FFPROBE_DEST} (ffprobe ${FFMPEG_RELEASE_TAG}, ${TARGET_TRIPLE})"

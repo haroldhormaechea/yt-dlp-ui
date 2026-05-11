@@ -177,16 +177,22 @@ the project's PolyForm Noncommercial posture.
 - License check runs in CI on every PR; any new dependency with an
   unrecognized or incompatible license fails the build.
 
-**UC 17 extension — bundled native binaries.** `cargo-deny` only inspects
-the Cargo dependency graph; it does NOT see the bundled native binaries
-(yt-dlp, deno, ffmpeg) shipped inside the installer. Native-binary
-license drift is policed by:
+**UC 17 / UC 28 extension — bundled native binaries.** `cargo-deny` only
+inspects the Cargo dependency graph; it does NOT see the bundled native
+binaries (yt-dlp, deno, ffmpeg, ffprobe) shipped inside the installer.
+ffprobe inherits ffmpeg's supply-chain posture wholesale — same BtbN
+archive on Linux + Windows (no second download), same `./configure`
+invocation on macOS (no second build), same SHA pin and configure-flag
+lint. Native-binary license drift is policed by:
 
 - The build-time configure-flag lint in `scripts/build-ffmpeg-macos.sh`
   (rejects `--enable-libx264|libx265|libfdk-aac|gpl|nonfree` in the
-  built binary's banner).
+  built binary's banner). UC 28 extends the lint to ffprobe's `-version`
+  output too — same forbidden regex, defense-in-depth in case a future
+  build-system drift gives the two binaries divergent configure lines.
 - The asset-name guard in `scripts/fetch-ffmpeg.sh` (refuses any asset
-  whose filename does not contain `-lgpl-`).
+  whose filename does not contain `-lgpl-`). Applies transitively to the
+  ffprobe extracted from the same archive.
 - The in-tree SHA256 pin in `scripts/runtime-deps-pins.env` (rotating
   to a non-LGPL build would mismatch the pin and fail the fetch).
 
@@ -329,9 +335,24 @@ build:
   resolve at install time on the user's machine against the user's own
   trusted package mirrors (`apt`, `dnf`); we do not ship those packages.
 
-### T13. Bundled-ffmpeg supply chain (UC 17)
+### T13. Bundled-ffmpeg + ffprobe supply chain (UC 17, UC 28)
 
-**Surface:** the release pipeline produces a per-OS bundled ffmpeg binary.
+**Surface:** the release pipeline produces per-OS bundled `ffmpeg` AND
+`ffprobe` binaries. Both ship at the canonical bundled-binary path
+(Linux `/opt/yt-dlp-ui/{ffmpeg,ffprobe}`, macOS
+`yt-dlp-ui.app/Contents/Resources/{ffmpeg,ffprobe}`,
+Windows `<InstallDir>\{ffmpeg,ffprobe}`). yt-dlp's `--ffmpeg-location <dir>`
+discovers both binaries from the same directory; the co-location invariant
+is checked at app startup (`crates/app/src/lib.rs`) and logged at ERROR if
+violated.
+
+UC 28 added ffprobe because yt-dlp's audio-only post-processor
+(`ExtractAudio`) and several metadata-probing paths invoke ffprobe
+directly. ffprobe inherits ffmpeg's supply-chain posture wholesale: same
+BtbN archive on Linux + Windows (no second download), same `./configure`
+invocation on macOS (no second build), same SHA pin, same
+configure-flag lint, same trust boundary.
+
 The supply chain has two distinct paths:
 
 1. **Linux + Windows.** Prebuilt LGPL-only static binary fetched from
@@ -390,7 +411,7 @@ The supply chain has two distinct paths:
 **macOS quarantine sub-bullet.** Bundled binaries inside an unsigned
 `.dmg` (Posture 3) inherit `com.apple.quarantine` from Gatekeeper on
 first run. Without intervention, every auxiliary binary spawn (yt-dlp,
-ffmpeg, deno) re-prompts Gatekeeper.
+ffmpeg, ffprobe, deno) re-prompts Gatekeeper.
 
 Mitigations applied:
 - `installer/build-macos-dmg.sh` runs `xattr -cr "${APP_DIR}"` before

@@ -49,8 +49,11 @@ const ENTRIES: &[AboutEntry] = &[
         license_text: DENO_MIT_TEXT,
         source_notice: None,
     },
+    // UC 28: ffprobe ships under the same FFmpeg distribution as ffmpeg —
+    // same version, same LGPL-2.1+ license text, same source notice. Single
+    // About entry covering both binaries; no separate license file.
     AboutEntry {
-        name: "ffmpeg",
+        name: "ffmpeg + ffprobe",
         version: ffmpeg_display_version(),
         license_name: "LGPL-2.1-or-later",
         license_text: LGPL_TEXT,

@@ -18,7 +18,7 @@
 //!     - the macOS-only `icon_snapshot_test.rs` pixel-diff baseline against
 //!       `_ComponentSmoke` (AC #10 primary satisfier), and
 //!     - the manual smoke addendum in `CONTRIBUTING.md` § "Manual smoke for
-//!       UC 29 (AddBar URL input rendering)" (AC #11).
+//!       UC 29 (`AddBar` URL input rendering)" (AC #11).
 //!
 //! - AC #10 (regression-resistance): pins that `_ComponentSmoke` — which
 //!   now hosts two `AddBar` instances at the head of its `VerticalLayout`
@@ -33,7 +33,7 @@
 //!
 //! Slint 1.16.1's headless backend (`init_no_event_loop`) does not run the
 //! event loop. More importantly, the `AddBar`'s `value` and
-//! `placeholder-visible` properties are **encapsulated inside the AddBar
+//! `placeholder-visible` properties are **encapsulated inside the `AddBar`
 //! subtree** — they are not lifted onto `MainWindow` as in-out properties,
 //! and the two `AddBar` instances inside `_ComponentSmoke` are positional
 //! (unnamed), so the Slint codegen does not expose host getters/setters for
@@ -54,7 +54,7 @@
 //! |----|------------------------------------------------------------------|
 //! | 1  | `_ComponentSmoke` pixel-diff baseline (macOS) + manual smoke      |
 //! | 2  | Manual smoke (cursor render is a per-OS rendering concern)        |
-//! | 3  | `_ComponentSmoke` pixel-diff baseline (one AddBar has `value: ""`) |
+//! | 3  | `_ComponentSmoke` pixel-diff baseline (one `AddBar` has `value: ""`) |
 //! | 4  | `_ComponentSmoke` pixel-diff baseline + manual smoke               |
 //! | 5  | Markup review (`DesignTokens.font-ui-family`, no orphan tokens)   |
 //! | 6  | Manual smoke (theme flip on both polarities)                      |
@@ -64,17 +64,17 @@
 //! | 10 | `_ComponentSmoke` pixel-diff baseline (macOS) — THIS FILE pins    |
 //! |    | the construction half so a markup-shape regression fails fast on |
 //! |    | every platform, not only macOS                                   |
-//! | 11 | CONTRIBUTING.md § "Manual smoke for UC 29 (AddBar URL input       |
+//! | 11 | CONTRIBUTING.md § "Manual smoke for UC 29 (`AddBar` URL input     |
 //! |    | rendering)"                                                       |
 
-use app::{MainWindow, _ComponentSmoke};
+use app::{_ComponentSmoke, MainWindow};
 
 /// Helper — install the headless backend and try to construct `MainWindow`.
 /// Mirrors `add_bar_audio_only_reset.rs::try_make_window`. Returns `None`
 /// when no Slint backend can be initialised (e.g. bare-CI Linux runner
 /// without an X / Wayland display) so the test skips cleanly rather than
 /// failing — the regression under test isn't "no display server", it is
-/// "did the new AddBar markup compile?".
+/// "did the new `AddBar` markup compile?".
 fn try_make_window() -> Option<MainWindow> {
     i_slint_backend_testing::init_no_event_loop();
     match MainWindow::new() {
@@ -139,18 +139,19 @@ fn main_window_constructs_with_uc29_addbar_textinput_rework() {
 /// AC #10 / #9 construction pin — `_ComponentSmoke` instantiates with the
 /// two new `AddBar` instances at the head of its `VerticalLayout`
 /// (`value: ""` for placeholder state, a realistic URL for typed-text
-/// state). The pixel-diff baseline (`crates/app/tests/baselines/
-/// _component_smoke.png`, regenerated on macOS) is the AC #10 visual
+/// state). The pixel-diff baseline at
+/// `crates/app/tests/baselines/_component_smoke.png` (regenerated on macOS)
+/// is the AC #10 visual
 /// regression check; this Rust-side construction pin is the cross-platform
 /// canary. If a future markup edit (re)introduces a parse error, drops the
 /// `AddBar` import in `design/_component_smoke.slint`, or changes the
-/// AddBar's public binding shape in a way that breaks the literal
+/// `AddBar`'s public binding shape in a way that breaks the literal
 /// `value: "..."` assignments, this test fails on every CI runner, not
 /// only macOS.
 ///
 /// Note: `_ComponentSmoke` is a `Window`-rooted component declared at
 /// `480 × 460 px` (height grew from 380 → 460 with UC 29's two AddBar
-/// additions, ~80 px of new content at the top of the VerticalLayout).
+/// additions, ~80 px of new content at the top of the `VerticalLayout`).
 /// `icon_snapshot_test.rs` has been updated to render at the new height
 /// — see that file's `HEIGHT` constant.
 #[test]

@@ -5,7 +5,7 @@
 //! render the modal's body, the danger-button label, and the toast string:
 //!
 //! * `pluralize_items(n)`           — "item" / "items"
-//! * `format_remove_all_body(n,k)`  — (line_1, line_2); line_2 is "" when k == 0
+//! * `format_remove_all_body(n,k)`  — (`line_1`, `line_2`); `line_2` is "" when k == 0
 //! * `format_remove_all_primary_label(n)` — "Remove <N>"
 //! * `format_remove_all_toast(n)`   — "Queue cleared (<N> item(s))."
 //!

@@ -660,3 +660,131 @@ swaps the modal `if root.open : Rectangle` branches for an
 unconditionally-mounted card would surface as a clipped or visible
 empty card with the modal "closed" — both branches must be guarded by
 `root.open`.
+
+### Manual smoke for UC 29 (AddBar URL input rendering)
+
+UC 29 fixed a regression in the AddBar URL input where typed text was
+clipped to a ~2–3-px sliver at the top of the input. The fix replaces
+the `std-widgets::TextEdit` (a multi-line scroll-view whose chrome was
+eating the 30-px input height) with a low-level `TextInput` configured
+`single-line: false; wrap: no-wrap; vertical-alignment: top;`, and
+overlays a separate `Text` element as the placeholder (since `TextInput`
+has no `placeholder-text` property). The multi-URL paste UX — `\n`-
+separated input split by `crates/app/src/model.rs::split_pasted_urls`
+— is preserved because `single-line: false` keeps `\n` in `value`.
+
+The icon-fidelity snapshot test (UC 13, AC #10) is extended with two
+`AddBar` instances at the top of `_ComponentSmoke` — one in placeholder
+state, one with a typed URL — so the rendered text band is pixel-
+diffed against the committed baseline on macOS. The snapshot test does
+NOT cover Linux or Windows; this manual smoke is the only check there.
+Run this checklist on at least one host before merging AddBar-touching
+changes, and on all three OSes at release time.
+
+Steps (`just run`, then in the running app):
+
+1. **Empty-field placeholder (AC #3, #6).** Open the app fresh, do
+   NOT click into the URL input. The placeholder reads
+   *"Paste a video or playlist URL — multiple lines supported"* in the
+   `text-3` grey of the active theme. Every glyph is fully visible
+   (descenders on `p`, `y` and round-bottoms on `a`, `e`, `o`, `c`
+   render in full — no top-edge clip). Toggle theme via the
+   moon/sun button; placeholder re-themes and remains uncliped (AC
+   #6).
+
+2. **Click-into-empty distinguishability (AC #2, #3).** Click into the
+   empty input. The blinking text cursor appears at the left edge,
+   rendered at the full vertical envelope of the input (not a 2-px
+   stub). Because `vertical-alignment: top`, the cursor anchors to
+   the top of the 30-px input region and is visually distinct from
+   the placeholder text it sits next to.
+
+3. **Full alphabet + digits visibility (AC #1).** Type the entire
+   lower-case alphabet `abcdefghijklmnopqrstuvwxyz`, then upper-case
+   `ABCDEFGHIJKLMNOPQRSTUVWXYZ`, then digits `0123456789`. For every
+   glyph: ascenders (`h k l b d f t`), descenders (`g j p q y`),
+   round-letter baselines (`a e o c s u v w x z`), and digit
+   round-bottoms (`0 3 6 8 9`) must render in full. Nothing clips at
+   the top or bottom edge of the input.
+
+4. **Placeholder disappears on first keystroke (AC #3).** Clear the
+   input (Cmd/Ctrl + A, Delete). Placeholder reappears. Type a single
+   character — placeholder disappears (the `visible: ti.text == ""`
+   predicate). Delete the character — placeholder reappears. The
+   transition is instant (no animation pin).
+
+5. **Multi-URL paste behavior (carry-over from UC 19 / UC 16).** Copy
+   a 3-URL blob separated by newlines:
+   `https://example.com/a\nhttps://example.com/b\nhttps://example.com/c`.
+   Paste into the input. The visible strip shows the first URL only
+   (top-anchored, `wrap: no-wrap`) — subsequent URLs are vertically
+   clipped off the bottom of the 30-px input. **This is expected** —
+   the underlying `value` still contains all three `\n`-separated
+   URLs, and clicking **Add** must enqueue three rows in the queue
+   list below (verified by checking the queue grows by three).
+
+6. **IME / multi-byte input (AC #1 edge case).** Switch your OS input
+   method to CJK (Japanese / Chinese / Korean) or to a Latin layout
+   with diacritics (Spanish, French). Type one of:
+   - CJK: `日本語のテスト` (Japanese), `测试中文` (Chinese), `한국어` (Korean).
+   - Accented Latin: `ÿçéñüÄÖÜ`.
+   Every glyph — including tall combining marks (`ÿ`, `Ä`) and CJK
+   characters with bottom-anchored strokes (`日`, `语`) — must render
+   in full. None of them get top-edge clipped.
+
+7. **Focus / blur visual states.** Click into the input (focus). Type
+   a character. Click outside the input (blur). The typed text
+   remains fully visible in both focus and blur states. Re-focus by
+   clicking into the input again; the text cursor returns at the
+   correct character position with full height.
+
+8. **Selection rendering.** Type `hello world`. Triple-click (or
+   Cmd/Ctrl + A) to select all. The selection highlight uses the
+   `accent-soft` background with `accent-text` foreground (per the
+   `selection-background-color` / `selection-foreground-color`
+   bindings in `add_bar.slint`). Re-theme — selection colors flip.
+
+9. **AC #7 — audio-only toggle alignment.** With the URL input
+   populated, eyeball the *Audio only* mono-caption label and the
+   pill switch to the right of the input. The label and pill should
+   be vertically aligned on the same row baseline as the URL input
+   they sit next to — the UC 29 fix must not have nudged them up or
+   down (the HorizontalLayout `alignment: stretch` should keep them
+   in line).
+
+10. **AC #8 — Add button alignment.** The primary `Add` button to the
+    right of the toggle must remain centered on the same row as the
+    URL input. No vertical drift between the input, the toggle, and
+    the Add button.
+
+11. **No regression to settings panel inputs (AC #9).** Open the
+    Settings panel (gear icon). Tab through inputs (the destination
+    directory display, the format selector, the concurrency stepper,
+    the cookies dropdown). Verify none of those text surfaces are
+    clipped — UC 29's fix is scoped to AddBar only and uses the
+    `Input` primitive in `design/components.slint`, untouched here.
+
+12. **Both themes (AC #6).** Click the moon/sun toggle. Repeat steps
+    1–3 in the other theme. Both themes must render the fix
+    correctly; the brief's accent-text colour means the cursor /
+    selection highlight will look different (light vs. dark accents)
+    but text glyphs must remain uncliped in either theme.
+
+On macOS only, after merging UC 29 you must regenerate the
+`_component_smoke.png` baseline via
+`SNAPSHOT_UPDATE=1 cargo test --package app --test icon_snapshot_test`
+(or `just snapshot-update`) and commit the updated baseline alongside
+the code change. The two `AddBar` instances at the head of
+`_ComponentSmoke` are the AC #10 regression-resistance check; a future
+markup change that re-clips the URL input will cause a pixel-diff fail
+on the next CI snapshot run.
+
+If any step fails, file the deviation as a UC 29 regression. Pitfalls
+specific to this fix: a regression that drops the
+`vertical-alignment: top` on `ti` would reintroduce baseline
+clipping on multi-line paste; a regression that reorders the
+placeholder `Text` *after* `ti` in the markup would make the
+placeholder render on top of typed text (instead of disappearing
+when the user types); a regression that flips `single-line: false`
+back to `true` would silently truncate multi-URL pastes at the first
+`\n` and break UC 16 / UC 19 paste semantics.

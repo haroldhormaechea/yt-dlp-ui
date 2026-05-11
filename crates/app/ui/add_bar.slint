@@ -1,20 +1,31 @@
 // Add bar — link-icon-prefixed input + primary "Add" button + theme-toggle
 // + gear (UC 09 reserved). Port of design/project/app.jsx ~lines 187-235.
 //
-// Note: we keep `TextEdit` (multi-line) instead of `Input` (single-line) for
-// paste UX — design says "Paste a video or playlist URL — multiple lines
-// supported". Single-line would silently truncate multi-line pastes.
+// URL input: low-level `TextInput` with `single-line: false; wrap: no-wrap;`
+// — this preserves the multi-URL paste UX (`\n`-separated, split by
+// `model::split_pasted_urls`) while keeping the visible strip one line tall.
+// Placeholder is overlaid as a separate `Text` element because `TextInput`
+// lacks a `placeholder-text` property. `std-widgets::TextEdit` was tried
+// previously and avoided because its multi-line scroll-view chrome clipped
+// typed text down to a thin sliver at the 30-px input height (UC 29).
+// Top alignment is chosen over center per UC 07's `align-items: stretch`
+// baseline anchor and because, on a multi-URL paste, the alternative is a
+// two-sided clip — top-anchored, the first URL stays fully legible and the
+// overflow is one-sided (subsequent URLs clip off the bottom).
 
 import { DesignTokens } from "design/tokens.slint";
 import { Button, Icon, Toggle } from "design/components.slint";
 import { Icons } from "icons.slint";
-import { TextEdit } from "std-widgets.slint";
 
 export component AddBar inherits Rectangle {
     in-out property <string> value <=> ti.text;
     // UC 19: per-URL "Audio only" toggle. Defaults to false (audio + video)
     // per AC #1; AC #6 — resets to false whenever the URL field is cleared.
     in-out property <bool> audio-only-on: false;
+    // UC 29: mirrors the placeholder Text's `visible:` predicate. Exposed
+    // so callers (and tests) can observe placeholder-vs-text state without
+    // reaching into the internal `ti`.
+    out property <bool> placeholder-visible: ti.text == "";
 
     callback add-clicked();
     callback toggle-theme-clicked();
@@ -45,7 +56,8 @@ export component AddBar inherits Rectangle {
         spacing: 8px;
         alignment: stretch;
 
-        // Input region — link icon + multi-line textedit.
+        // Input region — link icon + multi-line-capable TextInput overlaid
+        // with a separate placeholder Text. (UC 29 fix.)
         Rectangle {
             horizontal-stretch: 1;
             border-radius: DesignTokens.radius;
@@ -61,14 +73,44 @@ export component AddBar inherits Rectangle {
                 tint: DesignTokens.text-3;
             }
 
-            ti := TextEdit {
+            // Placeholder overlay. MUST appear before `ti` so TextInput
+            // renders on top and receives clicks. A future reformat that
+            // reorders these siblings would silently break click hit-testing
+            // and placeholder visibility. (UC 29.)
+            Text {
                 x: 30px;
                 y: 0;
                 width: parent.width - 30px;
                 height: parent.height;
-                placeholder-text: "Paste a video or playlist URL — multiple lines supported";
+                text: "Paste a video or playlist URL — multiple lines supported";
+                color: DesignTokens.text-3;
+                font-family: DesignTokens.font-ui-family;
                 font-size: 13px;
-                wrap: word-wrap;
+                vertical-alignment: top;
+                visible: ti.text == "";
+            }
+
+            ti := TextInput {
+                x: 30px;
+                y: 0;
+                width: parent.width - 30px;
+                height: parent.height;
+                color: DesignTokens.text;
+                font-family: DesignTokens.font-ui-family;
+                font-size: 13px;
+                // Keep `\n` in the bound `value` so multi-URL paste keeps
+                // working via `model::split_pasted_urls`. UC 29.
+                single-line: false;
+                // The visible strip is one line tall; we do not want the
+                // pasted multi-URL blob to soft-wrap the first URL across
+                // multiple visual rows. UC 29.
+                wrap: no-wrap;
+                // Top-anchored: avoids the two-sided clip on multi-line
+                // paste. First line stays fully legible at the top edge.
+                // UC 29.
+                vertical-alignment: top;
+                selection-background-color: DesignTokens.accent-soft;
+                selection-foreground-color: DesignTokens.accent-text;
             }
         }
 

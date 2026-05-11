@@ -1,0 +1,189 @@
+// UC 13: rendered smoke surface for the icon snapshot test. Extracted from
+// `components.slint` (UC 29) so it can import `AddBar` without creating an
+// import cycle (`add_bar.slint` itself imports `components.slint`).
+//
+// UC 29 addendum: two AddBar instances are pinned at the head of the
+// VerticalLayout so the snapshot test (AC #10) covers both the placeholder
+// state and the typed-text state — these are the surfaces whose clipping
+// regression brought UC 29 into being.
+//
+// The component is a fixed-size Window so the snapshot test can render it
+// via the software renderer without instantiating MainWindow. Icon-bearing
+// samples are always rendered (visible to the renderer); the remaining
+// primitive type-check exercises stay behind the original `if false :`
+// block so the Slint compiler still touches every type without paying for
+// them at render.
+
+import { DesignTokens } from "tokens.slint";
+import {
+    Button,
+    Icon,
+    Input,
+    Select,
+    Badge,
+    KbdHint,
+    Toggle,
+    Stepper,
+    Tooltip,
+    Toast,
+} from "components.slint";
+import { Icons } from "../icons.slint";
+import { AddBar } from "../add_bar.slint";
+
+export component _ComponentSmoke inherits Window {
+    in property <bool> always-false: false;
+
+    width: 480px;
+    height: 460px;
+    background: DesignTokens.bg;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+        alignment: start;
+
+        // UC 29: pins placeholder-state rendering (AC #3) — empty `value`,
+        // placeholder Text visible.
+        AddBar {
+            width: 460px;
+            value: "";
+        }
+
+        // UC 29: pins typed-text rendering (AC #1 / AC #4) — a realistic
+        // URL so the snapshot catches a regression to TextEdit-style
+        // clipping or top-edge misalignment.
+        AddBar {
+            width: 460px;
+            value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+        }
+
+        Button {
+            icon: Icons.plus;
+            text: "Sample";
+        }
+        Button {
+            icon: Icons.x;
+            modifier: "icon";
+        }
+        Button {
+            icon: Icons.play;
+            modifier: "sm";
+            text: "Play";
+        }
+        Icon {
+            source: Icons.alert;
+        }
+        Icon {
+            source: Icons.alert;
+            size: "sm";
+        }
+
+        // UC 13 follow-up — fake "row" layouts to visualise where the × slot
+        // ends up when the row's middle column has stretch=1 and the action
+        // column varies in width per row. The × must pin to the rightmost
+        // column across all three sample rows.
+        Rectangle {
+            background: DesignTokens.surface;
+            border-color: DesignTokens.border;
+            border-width: 1px;
+            height: 28px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                alignment: stretch;
+                Rectangle { width: 24px; height: 24px; background: DesignTokens.surface-3; }
+                Text { horizontal-stretch: 1; text: "row A — many actions"; vertical-alignment: center; color: DesignTokens.text; }
+                Badge { text: "Downloading"; status: "inflight"; }
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Button { text: "Download"; modifier: "sm"; variant: "primary"; }
+                    Button { text: "Cancel"; modifier: "sm"; }
+                }
+                Button { modifier: "icon-sm"; icon: Icons.x; variant: "ghost"; }
+            }
+        }
+        Rectangle {
+            background: DesignTokens.surface;
+            border-color: DesignTokens.border;
+            border-width: 1px;
+            height: 28px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                alignment: stretch;
+                Rectangle { width: 24px; height: 24px; background: DesignTokens.surface-3; }
+                Text { horizontal-stretch: 1; text: "row B — one action"; vertical-alignment: center; color: DesignTokens.text; }
+                Badge { text: "Error"; status: "error"; }
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                    Button { text: "Cancel"; modifier: "sm"; }
+                }
+                Button { modifier: "icon-sm"; icon: Icons.x; variant: "ghost"; }
+            }
+        }
+        Rectangle {
+            background: DesignTokens.surface;
+            border-color: DesignTokens.border;
+            border-width: 1px;
+            height: 28px;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                alignment: stretch;
+                Rectangle { width: 24px; height: 24px; background: DesignTokens.surface-3; }
+                Text { horizontal-stretch: 1; text: "row C — no actions"; vertical-alignment: center; color: DesignTokens.text; }
+                Badge { text: "Done"; status: "done"; }
+                HorizontalLayout {
+                    spacing: 4px;
+                    alignment: start;
+                }
+                Button { modifier: "icon-sm"; icon: Icons.x; variant: "ghost"; }
+            }
+        }
+    }
+
+    if root.always-false : Button {
+        text: "Sample";
+        variant: "primary";
+        modifier: "sm";
+    }
+    if root.always-false : Input {
+        placeholder: "x";
+    }
+    if root.always-false : Select {
+        model: ["a", "b"];
+    }
+    if root.always-false : Select {
+        model: ["a", "b"];
+        enabled: false;
+    }
+    if root.always-false : Badge {
+        text: "queued";
+        status: "queued";
+    }
+    if root.always-false : KbdHint {
+        text: "⌘";
+    }
+    if root.always-false : Toggle {
+        on: true;
+        label: "smoke";
+    }
+    if root.always-false : Stepper {
+        value: 3;
+        min: 1;
+        max: 10;
+    }
+    if root.always-false : Tooltip {
+        text: "smoke";
+        target-hovered: false;
+    }
+    if root.always-false : Toast {
+        text: "smoke";
+        visible-now: true;
+    }
+}

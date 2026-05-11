@@ -16,6 +16,16 @@
 //! Set `SNAPSHOT_UPDATE=1` in the env to overwrite the baseline instead of
 //! comparing against it (AC #11). The `Justfile`'s `snapshot-update`
 //! recipe wires this knob.
+//!
+//! UC 29 (2026-05-11): `HEIGHT` was raised from 380 to 460 px to match
+//! `_ComponentSmoke`'s new Window height after two `AddBar` instances were
+//! added at the head of its `VerticalLayout` (placeholder-state + typed-text
+//! state — the AC #10 regression-resistance check). Capturing the full
+//! Window is required so a future markup change to the lower rows does not
+//! silently fall outside the rendered frame. The baseline PNG at
+//! `crates/app/tests/baselines/_component_smoke.png` must be regenerated on
+//! macOS via `SNAPSHOT_UPDATE=1 cargo test --package app --test
+//! icon_snapshot_test` and committed alongside the UC 29 fix.
 
 #![cfg(target_os = "macos")]
 
@@ -30,7 +40,9 @@ use slint::platform::{Platform, PlatformError, WindowAdapter};
 slint::include_modules!();
 
 const WIDTH: u32 = 480;
-const HEIGHT: u32 = 380;
+// UC 29: bumped 380 → 460 to match `_ComponentSmoke`'s new Window height
+// (two `AddBar` instances added at the head of its `VerticalLayout`).
+const HEIGHT: u32 = 460;
 
 struct TestPlatform {
     window: Rc<MinimalSoftwareWindow>,
@@ -85,7 +97,9 @@ fn component_smoke_pixel_matches_baseline() {
         }
     };
 
-    // The component is a `Window` rooted at 360 × 240 px; size the
+    // The component is a `Window` rooted at 480 × 460 px (UC 29 raised
+    // the height from 380 to 460 to accommodate the two new `AddBar`
+    // instances at the head of the smoke's VerticalLayout); size the
     // software window adapter to match so the renderer paints the full
     // surface. Physical size — the test renders at scale factor 1.0.
     window.set_size(slint::PhysicalSize::new(WIDTH, HEIGHT));

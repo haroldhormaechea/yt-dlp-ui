@@ -159,8 +159,5 @@ fn toast_reads_queue_cleared_n_items_with_period() {
     // — note the trailing period and the parenthesised count.
     assert_eq!(format_remove_all_toast(1), "Queue cleared (1 item).");
     assert_eq!(format_remove_all_toast(5), "Queue cleared (5 items).");
-    assert_eq!(
-        format_remove_all_toast(123),
-        "Queue cleared (123 items)."
-    );
+    assert_eq!(format_remove_all_toast(123), "Queue cleared (123 items).");
 }

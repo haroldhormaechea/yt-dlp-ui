@@ -823,7 +823,7 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
     ///    states — yt-dlp may still be flushing.
     /// 4. Best-effort delete each row's `.part` file (re-read so any path
     ///    persisted by the bridge between steps 2 and 3 is picked up).
-    /// 5. Single SQLite transaction: prune `history` rows referencing
+    /// 5. Single `SQLite` transaction: prune `history` rows referencing
     ///    `done` queue items (the `history.queue_item_id NOT NULL
     ///    REFERENCES queue_items(id)` FK with `PRAGMA foreign_keys = ON`
     ///    would otherwise reject the bulk delete), then `DELETE FROM
@@ -833,7 +833,7 @@ impl<B: BridgeOps + Clone> DownloadManager<B> {
     ///    (Today every `done` row carries at most one history entry; the
     ///    prune scope is exactly those.)
     /// 6. Emit `RowRemoved` per id so `ui_bridge` clears the Slint
-    ///    VecModel and `recompute_counts` runs (AC #7).
+    ///    `VecModel` and `recompute_counts` runs (AC #7).
     ///
     /// # Errors
     ///

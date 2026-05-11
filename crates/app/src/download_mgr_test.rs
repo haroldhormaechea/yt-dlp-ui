@@ -2762,7 +2762,8 @@ async fn remove_all_empties_mixed_queue() {
         }
     }
     assert_eq!(
-        removed_ids, seeded_ids,
+        removed_ids,
+        seeded_ids,
         "RowRemoved must be emitted for every seeded id (missing: {:?})",
         seeded_ids
             .difference(&removed_ids)
@@ -2799,17 +2800,17 @@ async fn remove_all_withdraws_pending_bot_check_rows() {
     );
 
     env.manager
-        .add_url("https://www.youtube.com/watch?v=remove-all-bot-check".to_string(), None)
+        .add_url(
+            "https://www.youtube.com/watch?v=remove-all-bot-check".to_string(),
+            None,
+        )
         .await
         .expect("add");
 
     let id = env
         .db
         .with_conn(|c| {
-            crate::db::queue::find_by_url(
-                c,
-                "https://www.youtube.com/watch?v=remove-all-bot-check",
-            )
+            crate::db::queue::find_by_url(c, "https://www.youtube.com/watch?v=remove-all-bot-check")
         })
         .unwrap()
         .unwrap()
@@ -2899,7 +2900,10 @@ async fn remove_all_withdraws_pending_bot_check_rows() {
         }
     }
     drop(rx);
-    assert!(saw_removed, "RowRemoved must be emitted for the deleted row");
+    assert!(
+        saw_removed,
+        "RowRemoved must be emitted for the deleted row"
+    );
     assert!(
         saw_cancelled,
         "the supervisor's cancel.notified() arm must write status = 'cancelled' \
